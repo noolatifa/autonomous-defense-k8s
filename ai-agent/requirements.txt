@@ -1,1 +1,3 @@
 confluent-kafka
+kubernetes
+requests
