@@ -1,0 +1,87 @@
+---
+- name: 07 - Deploy Test Target (web-cible)
+  hosts: kubernetes
+  become: false
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ ansible_user }}"
+    agent_dir: "{{ current_user_home }}/autonomous-defense/ai-agent"
+
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  tasks:
+
+    # --- Ensure apps namespace exists ---
+
+    - name: Ensure apps namespace exists
+      shell: kubectl create ns apps --dry-run=client -o yaml | kubectl apply -f -
+
+    # --- Create remote directory ---
+
+    - name: Create ai-agent directory on remote
+      file:
+        path: "{{ agent_dir }}"
+        state: directory
+        mode: "0755"
+
+    # --- Copy manifest ---
+
+    - name: Copy web-cible manifest to remote
+      copy:
+        src: "{{ playbook_dir }}/../../ai-agent/web-cible-deployment.yaml"
+        dest: "{{ agent_dir }}/web-cible-deployment.yaml"
+        mode: "0644"
+
+    # --- Remove bare pod if it exists ---
+
+    - name: Remove bare web-cible pod if it exists
+      shell: kubectl delete pod web-cible -n apps --ignore-not-found
+      register: delete_result
+
+    - name: Show deletion result
+      debug:
+        msg: "{{ delete_result.stdout | default('nothing to delete') }}"
+
+    # --- Deploy as proper Deployment ---
+
+    - name: Deploy web-cible as Deployment
+      shell: kubectl apply -f {{ agent_dir }}/web-cible-deployment.yaml
+      register: deploy_result
+
+    - name: Show deploy result
+      debug:
+        msg: "{{ deploy_result.stdout_lines }}"
+
+    # --- Wait for ready ---
+
+    - name: Wait for web-cible to be ready
+      shell: >
+        kubectl wait --for=condition=Ready pod
+        -l app=web-cible -n apps --timeout=60s
+
+    # --- Verify ---
+
+    - name: Get web-cible status
+      shell: kubectl get pods,svc -n apps -o wide
+      register: apps_status
+
+    - name: Show apps namespace
+      debug:
+        msg: "{{ apps_status.stdout_lines }}"
+
+    # --- Confirm attack simulation still works ---
+
+    - name: Test attack simulation works on new Deployment pod
+      shell: |
+        POD=$(kubectl get pod -n apps -l app=web-cible \
+          -o jsonpath='{.items[0].metadata.name}')
+        echo "Target pod: $POD"
+        kubectl exec -n apps $POD -- cat /etc/passwd | head -3
+      register: test_result
+      ignore_errors: true
+
+    - name: Show test result
+      debug:
+        msg: "{{ test_result.stdout_lines }}"
