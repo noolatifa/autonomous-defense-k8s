@@ -1,0 +1,41 @@
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-agent
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-agent-role
+rules:
+  # Read pods and their owners
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete", "patch"]
+  # Read ReplicaSets to trace pod → Deployment ownership
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments"]
+    verbs: ["get", "list", "patch"]
+  # Apply NetworkPolicies for isolation
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+  # Taint nodes
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-agent-binding
+subjects:
+  - kind: ServiceAccount
+    name: ai-agent
+    namespace: apps
+roleRef:
+  kind: ClusterRole
+  name: ai-agent-role
+  apiGroup: rbac.authorization.k8s.io
