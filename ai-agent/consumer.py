@@ -32,6 +32,11 @@ while True:
     try:
         alert = json.loads(msg.value().decode("utf-8"))
         analysis = analyze_alert(alert)
+
+        if analysis.get("pod", "").startswith("ai-agent"):
+            log.debug(f"Ignoring self-detection: {analysis['rule']}")
+            continue
+
         decision = decide_action(analysis)
 
         log.info(f"ALERT  rule={analysis['rule']} score={analysis['risk_score']} "
