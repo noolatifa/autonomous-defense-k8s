@@ -1,3 +1,4 @@
+
 def decide_action(analysis: dict) -> dict:
     score = analysis["risk_score"]
 
@@ -14,5 +15,8 @@ def decide_action(analysis: dict) -> dict:
         "action": action,
         "reason": f"Risk score is {score}",
         "target_namespace": analysis["namespace"],
-        "target_pod": analysis["pod"]
+        "target_pod": analysis["pod"],
+        "target_node": analysis["node"],
+        "rule": analysis["rule"],
+        "risk_score": score
     }
