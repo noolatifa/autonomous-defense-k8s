@@ -1,0 +1,125 @@
+---
+- name: 06 - Deploy AI Agent
+  hosts: kubernetes
+  become: false
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ ansible_user }}"
+    agent_dir: "{{ current_user_home }}/autonomous-defense/ai-agent"
+
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  tasks:
+
+    # 1. Install Docker
+    - name: Install Docker
+      become: true
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    # 2. Add user to docker group
+    - name: Add user to docker group
+      become: true
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    # 3. Create agent directory on remote
+    - name: Create AI agent directory on remote
+      file:
+        path: "{{ agent_dir }}"
+        state: directory
+        mode: "0755"
+
+    # 4. Copy Python source files
+    - name: Copy Python source files
+      copy:
+        src: "{{ item }}"
+        dest: "{{ agent_dir }}/{{ item | basename }}"
+        mode: "0644"
+      loop:
+        - "{{ playbook_dir }}/../../ai-agent/consumer.py"
+        - "{{ playbook_dir }}/../../ai-agent/analyzer.py"
+        - "{{ playbook_dir }}/../../ai-agent/policy.py"
+        - "{{ playbook_dir }}/../../ai-agent/enforcer.py"
+        - "{{ playbook_dir }}/../../ai-agent/requirements.txt"
+        - "{{ playbook_dir }}/../../ai-agent/Dockerfile"
+
+    # 5. Copy Kubernetes manifests
+    - name: Copy Kubernetes manifests
+      copy:
+        src: "{{ item }}"
+        dest: "{{ agent_dir }}/{{ item | basename }}"
+        mode: "0644"
+      loop:
+        - "{{ playbook_dir }}/../../ai-agent/rbac.yaml"
+        - "{{ playbook_dir }}/../../ai-agent/agent-deployment.yaml"
+
+    # 6. Build Docker image
+    - name: Build AI agent Docker image
+      become: true
+      shell: |
+        cd {{ agent_dir }}
+        docker build -t ai-agent:latest .
+      register: docker_build
+      changed_when: true
+
+    - name: Show Docker build result
+      debug:
+        msg: "{{ docker_build.stdout_lines[-5:] }}"
+
+    # 7. Import image into containerd so Kubernetes can use it
+    - name: Import Docker image into containerd for Kubernetes
+      become: true
+      shell: docker save ai-agent:latest | ctr -n k8s.io images import -
+      changed_when: true
+
+    # 8. Apply RBAC - ServiceAccount + ClusterRole + Binding
+    - name: Apply RBAC
+      shell: kubectl apply -f {{ agent_dir }}/rbac.yaml
+      register: rbac_result
+
+    - name: Show RBAC result
+      debug:
+        msg: "{{ rbac_result.stdout_lines }}"
+
+    # 9. Deploy the AI agent
+    - name: Deploy AI agent
+      shell: kubectl apply -f {{ agent_dir }}/agent-deployment.yaml
+      register: agent_result
+
+    - name: Show agent deployment result
+      debug:
+        msg: "{{ agent_result.stdout_lines }}"
+
+    # 10. Restart to pick up the new image
+    - name: Restart agent to pick up new image
+      shell: kubectl rollout restart deployment/ai-agent -n apps
+
+    # 11. Wait for agent to be ready
+    - name: Wait for AI agent pod to be ready
+      shell: kubectl wait --for=condition=Ready pod -l app=ai-agent -n apps --timeout=120s
+
+    # 12. Verify pods in apps namespace
+    - name: Get all pods in apps namespace
+      shell: kubectl get pods -n apps -o wide
+      register: pods_output
+
+    - name: Show pods
+      debug:
+        msg: "{{ pods_output.stdout_lines }}"
+
+    # 13. Show agent logs to confirm it started correctly
+    - name: Show AI agent logs
+      shell: kubectl logs -n apps deployment/ai-agent --tail=20
+      register: agent_logs
+      ignore_errors: true
+
+    - name: Show agent logs
+      debug:
+        msg: "{{ agent_logs.stdout_lines }}"
