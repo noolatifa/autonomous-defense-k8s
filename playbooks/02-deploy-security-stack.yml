@@ -1,0 +1,180 @@
+
+---
+- name: 02 - Security Stack Deployment (Falco + Prometheus + Grafana)
+  hosts: kubernetes
+  become: false
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ ansible_user }}"
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  tasks:
+
+    # --- Helm Installation ---
+
+    - name: Install Helm package manager
+      become: true
+      shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Add required Helm repositories
+      shell: |
+        helm repo add falcosecurity https://falcosecurity.github.io/charts
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo add grafana https://grafana.github.io/helm-charts
+        helm repo update
+
+    # --- Namespace Creation ---
+
+    - name: Create Kubernetes namespaces
+      shell: kubectl create ns {{ item }} --dry-run=client -o yaml | kubectl apply -f -
+      loop:
+        - monitoring
+        - security
+        - apps
+
+    # --- Storage Class ---
+
+    - name: Install local-path StorageClass for PersistentVolumes
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+
+    - name: Set local-path as default StorageClass
+      shell: |
+        kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+
+
+    # --- Prometheus + Pushgateway ---
+
+    - name: Deploy Prometheus with Pushgateway
+      shell: |
+        helm upgrade --install prometheus prometheus-community/prometheus \
+          -n monitoring \
+          --set server.service.type=NodePort \
+          --set server.service.nodePort=30090 \
+          --set pushgateway.enabled=true \
+          --wait --timeout=300s
+
+    # --- Grafana ---
+
+    - name: Deploy Grafana with Prometheus datasource
+      shell: |
+        helm upgrade --install grafana grafana/grafana \
+          -n monitoring \
+          --set service.type=NodePort \
+          --set service.nodePort=31281 \
+          --set adminPassword=admin123 \
+          --set datasources."datasources\.yaml".apiVersion=1 \
+          --set datasources."datasources\.yaml".datasources[0].name=Prometheus \
+          --set datasources."datasources\.yaml".datasources[0].type=prometheus \
+          --set datasources."datasources\.yaml".datasources[0].url="http://prometheus-server.monitoring.svc.cluster.local:80" \
+          --set datasources."datasources\.yaml".datasources[0].isDefault=true \
+          --wait --timeout=600s
+
+    # --- Falco ---
+
+    - name: Deploy Falco with modern eBPF and Kafka output
+      shell: |
+        helm upgrade --install falco falcosecurity/falco \
+          --version 4.21.0 \
+          -n security \
+          --set driver.kind=modern_ebpf \
+          --set falco.json_output=true \
+          --set falco.stdout_output.enabled=true \
+          --set falcosidekick.enabled=true \
+          --set falcosidekick.config.kafka.hostport="kafka.kafka-system.svc.cluster.local:9092" \
+          --set falcosidekick.config.kafka.topic="falco-alerts" \
+          --set falcoctl.artifact.install.enabled=false \
+          --set falcoctl.artifact.follow.enabled=false
+
+    # --- Test Pod ---
+
+    - name: Deploy nginx test pod (attack simulation target)
+      shell: |
+        kubectl run web-cible --image=nginx -n apps --dry-run=client -o yaml | kubectl apply -f -
+
+    # --- Falco to Pushgateway Script ---
+
+    - name: Create Falco to Pushgateway forwarding script
+      copy:
+        dest: "{{ current_user_home }}/falco-to-pushgateway.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Script: Forward Falco security events to Prometheus Pushgateway
+          # Flow: Falco logs -> Pushgateway -> Prometheus -> Grafana
+
+          # Start port-forwarding for Pushgateway
+          kubectl port-forward -n monitoring svc/prometheus-prometheus-pushgateway 9091:9091 &
+          sleep 3
+
+          # Start port-forwarding for Prometheus
+          kubectl port-forward -n monitoring svc/prometheus-server 9090:80 &
+          sleep 3
+
+          COUNT=0
+
+          # Get Falco pod name
+          FALCO_POD=$(kubectl get pods -n security \
+            -l app.kubernetes.io/name=falco \
+            -o jsonpath='{.items[0].metadata.name}')
+
+          echo "Monitoring Falco pod: $FALCO_POD"
+          echo "Waiting for security events..."
+
+          # Stream Falco logs and forward events to Pushgateway
+          kubectl logs -n security "$FALCO_POD" -c falco -f | \
+            grep --line-buffered "priority" | \
+            while read line; do
+              COUNT=$((COUNT + 1))
+              RULE=$(echo "$line" | python3 -c "
+          import sys, json
+          try:
+              d = json.loads(sys.stdin.read())
+              print(d.get('rule', 'unknown'))
+          except:
+              print('unknown')
+          " 2>/dev/null || echo "unknown")
+              printf "falco_events_total %d\n" $COUNT | \
+                curl -s --data-binary @- \
+                "http://localhost:9091/metrics/job/falco/instance/k8s"
+              echo "[ALERT] #$COUNT - Rule: $RULE"
+            done
+
+    # --- README ---
+
+    - name: Create project README
+      copy:
+        dest: "{{ current_user_home }}/README.md"
+        content: |
+          # Autonomous Defense - Security Stack
+
+          ## Architecture
+          Falco -> Pushgateway -> Prometheus -> Grafana
+
+          ## Access
+          - Grafana    : http://192.168.28.146:31281 (admin / admin123)
+          - Prometheus : http://192.168.28.146:30090
+
+          ## Start Detection
+          bash ~/falco-to-pushgateway.sh
+
+          ## Simulate Attacks
+          kubectl exec -it web-cible -n apps -- cat /etc/shadow
+          kubectl exec -it web-cible -n apps -- cat /etc/passwd
+          kubectl exec -it web-cible -n apps -- bash -c "id && whoami"
+
+          ## Grafana Dashboard Query
+          falco_events_total
+
+    # --- Verification ---
+
+    - name: Verify all pods are running
+      shell: kubectl get pods --all-namespaces
+      register: all_pods
+
+    - name: Display pod status
+      debug:
+        msg: "{{ all_pods.stdout }}"

@@ -1,0 +1,41 @@
+---
+- name: Create Kafka topics
+  hosts: all
+  become: false
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ current_user }}"
+
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  tasks:
+    - name: Get Kafka pod name
+      command: >
+        kubectl get pod -n kafka-system -l app=kafka
+        -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}'
+      register: kafka_pod
+
+    - name: Create topic falco-alerts
+      command: >
+        kubectl exec -n kafka-system {{ kafka_pod.stdout }} --
+        kafka-topics
+        --bootstrap-server localhost:9092
+        --create
+        --topic falco-alerts
+        --partitions 1
+        --replication-factor 1
+        --if-not-exists
+
+    - name: Verify topics
+      command: >
+        kubectl exec -n kafka-system {{ kafka_pod.stdout }} --
+        kafka-topics
+        --bootstrap-server localhost:9092
+        --list
+      register: topics_list
+
+    - name: Show topics
+      debug:
+        msg: "{{ topics_list.stdout_lines }}"

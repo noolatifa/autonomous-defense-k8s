@@ -1,0 +1,38 @@
+def analyze_alert(alert: dict) -> dict:
+    rule = alert.get("rule", "unknown")
+    priority = alert.get("priority", "unknown")
+    fields = alert.get("output_fields", {})
+
+    pod = fields.get("k8s.pod.name", "unknown")
+    namespace = fields.get("k8s.ns.name", "unknown")
+    command = fields.get("proc.cmdline", "unknown")
+    user = fields.get("user.name", "unknown")
+    file = fields.get("fd.name", "")
+
+    risk_score = 0
+
+    if priority in ["Emergency", "Alert", "Critical"]:
+        risk_score += 80
+    elif priority == "Warning":
+        risk_score += 60
+    elif priority == "Notice":
+        risk_score += 40
+
+    if "/etc/shadow" in file:
+        risk_score += 30
+
+    if "Terminal shell in container" in rule:
+        risk_score += 30
+
+    risk_score = min(risk_score, 100)
+
+    return {
+        "rule": rule,
+        "priority": priority,
+        "namespace": namespace,
+        "pod": pod,
+        "command": command,
+        "user": user,
+        "file": file,
+        "risk_score": risk_score
+    }

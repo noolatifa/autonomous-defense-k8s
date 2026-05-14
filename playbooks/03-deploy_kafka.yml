@@ -1,0 +1,14 @@
+---
+- name: Deploy Kafka on Kubernetes
+  hosts: kubernetes
+  become: false
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ current_user }}"
+
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  roles:
+    - kafka

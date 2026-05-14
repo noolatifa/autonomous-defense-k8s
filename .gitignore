@@ -1,0 +1,95 @@
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =========================
+# ENV / SECRETS
+# =========================
+.env
+.env.*
+*.pem
+*.key
+*.crt
+secrets.yml
+vault.yml
+
+# kube configs secrets
+kubeconfig
+*.kubeconfig
+
+# =========================
+# ANSIBLE
+# =========================
+*.retry
+ansible.log
+
+# Collections / roles cache
+collections/
+roles/vendor/
+
+# =========================
+# KUBERNETES
+# =========================
+*.kubeconfig
+kubeconfig.yaml
+
+# Generated manifests
+generated/
+rendered/
+
+# Helm
+charts/**/charts/
+charts/**/tmp/
+
+# =========================
+# LOGS
+# =========================
+logs/
+*.log
+
+# Falco outputs
+falco-events.json
+falco.log
+
+# Kafka temp
+kafka-logs/
+zookeeper/
+
+# =========================
+# DATABASES / CACHE
+# =========================
+*.db
+redis-data/
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+
+.DS_Store
+Thumbs.db
+
+# =========================
+# TERRAFORM (if later)
+# =========================
+.terraform/
+terraform.tfstate*

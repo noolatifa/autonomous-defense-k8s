@@ -1,0 +1,20 @@
+---
+- name: Ensure Kafka namespace exists
+  shell: kubectl create namespace kafka-system --dry-run=client -o yaml | kubectl apply -f -
+  become: false
+
+- name: Ensure Kafka manifest directory exists on remote
+  file:
+    path: "{{ current_user_home }}/autonomous-defense/manifests/kafka"
+    state: directory
+    mode: "0755"
+
+- name: Copy Kafka manifest to remote
+  copy:
+    src: "{{ playbook_dir }}/../manifests/kafka/kafka-direct.yaml"
+    dest: "{{ current_user_home }}/autonomous-defense/manifests/kafka/kafka-direct.yaml"
+    mode: "0644"
+
+- name: Deploy Kafka via Direct Manifest
+  command: kubectl apply -f "{{ current_user_home }}/autonomous-defense/manifests/kafka/kafka-direct.yaml"
+  become: false

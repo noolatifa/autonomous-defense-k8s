@@ -1,0 +1,30 @@
+---
+- name: Link Falco to Kafka for Autonomous Defense
+  hosts: all
+  become: true
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ current_user }}"
+
+  tasks:
+    - name: Update Falco configuration to enable Kafka output
+      kubernetes.core.helm:
+        name: falco
+        chart_ref: falcosecurity/falco
+        release_namespace: security
+        kubeconfig: "{{ current_user_home }}/.kube/config"
+        values:
+          driver:
+            kind: modern_ebpf
+          falco:
+            json_output: true
+            stdout_output:
+              enabled: true
+            extraArgs: ["--unbuffered"]
+          falcosidekick:
+            enabled: true
+            config:
+              kafka:
+                hostport: "kafka.kafka-system.svc.cluster.local:9092"
+                topic: "falco-alerts"
