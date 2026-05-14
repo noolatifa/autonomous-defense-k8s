@@ -124,6 +124,9 @@ def _full_response(pod_name: str, namespace: str, node_name: str,
     # 4. Delete compromised pod
     _delete_pod(pod_name, namespace)
     log.info(f"DELETED pod={pod_name}")
+    if owner:
+        _scale_down(owner, namespace)
+    _cleanup_isolation_policy(pod_name, namespace)
 
     # 5. Taint node (multi-node ready — harmless on single node)
     if node_name and node_name != "unknown":
@@ -257,6 +260,34 @@ def _delete_pod(pod_name: str, namespace: str):
             log.info(f"Pod {pod_name} already gone")
         else:
             log.error(f"Failed to delete pod: {e}")
+
+
+def _scale_down(deployment_name: str, namespace: str):
+    try:
+        dep = apps_api.read_namespaced_deployment(deployment_name, namespace)
+        current = dep.spec.replicas or 2
+        target = max(1, current - 1)
+        apps_api.patch_namespaced_deployment(
+            deployment_name, namespace,
+            {"spec": {"replicas": target}}
+        )
+        log.info(f"Deployment {deployment_name} scaled back to {target} replicas")
+    except ApiException as e:
+        log.error(f"Failed to scale down deployment: {e}")
+
+
+def _cleanup_isolation_policy(pod_name: str, namespace: str):
+    policy_name = f"isolate-{pod_name}"
+    try:
+        net_api.delete_namespaced_network_policy(policy_name, namespace)
+        log.info(f"NetworkPolicy {policy_name} cleaned up")
+    except ApiException as e:
+        if e.status == 404:
+            pass
+        else:
+            log.error(f"Failed to cleanup NetworkPolicy: {e}")
+
+
 
 
 def _taint_node(node_name: str):
