@@ -5,16 +5,16 @@
 
 - name: Ensure Kafka manifest directory exists on remote
   file:
-    path: "{{ current_user_home }}/autonomous-defense/manifests/kafka"
+    path: "{{ current_user_home }}/autonomous-defense/k8s/kafka"
     state: directory
     mode: "0755"
 
 - name: Copy Kafka manifest to remote
   copy:
-    src: "{{ playbook_dir }}/../manifests/kafka/kafka-direct.yaml"
-    dest: "{{ current_user_home }}/autonomous-defense/manifests/kafka/kafka-direct.yaml"
+    src: "{{ playbook_dir }}/../../k8s/kafka/kafka-direct.yaml"
+    dest: "{{ current_user_home }}/autonomous-defense/k8s/kafka/kafka-direct.yaml"
     mode: "0644"
 
 - name: Deploy Kafka via Direct Manifest
-  command: kubectl apply -f "{{ current_user_home }}/autonomous-defense/manifests/kafka/kafka-direct.yaml"
+  command: kubectl apply -f "{{ current_user_home }}/autonomous-defense/k8s/kafka/kafka-direct.yaml"
   become: false
