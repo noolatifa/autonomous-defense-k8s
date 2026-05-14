@@ -1,3 +1,4 @@
+
 def analyze_alert(alert: dict) -> dict:
     rule = alert.get("rule", "unknown")
     priority = alert.get("priority", "unknown")
@@ -8,9 +9,12 @@ def analyze_alert(alert: dict) -> dict:
     command = fields.get("proc.cmdline", "unknown")
     user = fields.get("user.name", "unknown")
     file = fields.get("fd.name", "")
+    node = alert.get("hostname", "unknown")
+
 
     risk_score = 0
 
+    # Priority base score
     if priority in ["Emergency", "Alert", "Critical"]:
         risk_score += 80
     elif priority == "Warning":
@@ -18,11 +22,19 @@ def analyze_alert(alert: dict) -> dict:
     elif priority == "Notice":
         risk_score += 40
 
+    # Rule bonuses
     if "/etc/shadow" in file:
         risk_score += 30
-
+    if "/etc/passwd" in file:
+        risk_score += 20
     if "Terminal shell in container" in rule:
         risk_score += 30
+    if "Privilege escalation" in rule:
+        risk_score += 30
+    if "Write below binary dir" in rule:
+        risk_score += 20
+    if "Outbound connection" in rule:
+        risk_score += 20
 
     risk_score = min(risk_score, 100)
 
@@ -31,6 +43,7 @@ def analyze_alert(alert: dict) -> dict:
         "priority": priority,
         "namespace": namespace,
         "pod": pod,
+        "node": node,
         "command": command,
         "user": user,
         "file": file,
