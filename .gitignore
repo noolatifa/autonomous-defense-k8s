@@ -37,6 +37,7 @@ kubeconfig
 
 # =========================
 # ANSIBLE
+ansible/inventory/hosts.ini
 # =========================
 *.retry
 ansible.log
