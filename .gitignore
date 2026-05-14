@@ -93,3 +93,19 @@ Thumbs.db
 # =========================
 .terraform/
 terraform.tfstate*
+
+
+
+# Docker
+*.tar
+
+# Kubernetes secrets
+*.secret.yaml
+secret-*.yaml
+
+# Local test outputs
+tmp/
+temp/
+
+# Swap files
+*.swp
