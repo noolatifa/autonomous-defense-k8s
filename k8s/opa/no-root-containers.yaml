@@ -22,6 +22,7 @@ kind: NoRoot
 metadata:
   name: no-root-containers
 spec:
+  enforcementAction: deny
   match:
     kinds:
       - apiGroups: [""]
