@@ -33,9 +33,10 @@ while True:
         alert = json.loads(msg.value().decode("utf-8"))
         analysis = analyze_alert(alert)
 
-        if analysis.get("pod", "").startswith("ai-agent"):
+        if analysis.get("pod" or "").startswith("ai-agent"):
             log.debug(f"Ignoring self-detection: {analysis['rule']}")
             continue
+
 
         decision = decide_action(analysis)
 
@@ -47,3 +48,4 @@ while True:
 
     except Exception as e:
         log.error(f"Error processing alert: {e}", exc_info=True)
+
