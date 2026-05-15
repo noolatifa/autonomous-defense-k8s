@@ -35,6 +35,12 @@ def analyze_alert(alert: dict) -> dict:
         risk_score += 20
     if "Outbound connection" in rule:
         risk_score += 20
+    if priority == "Notice":
+        risk_score += 30
+    if "/etc/sudoers" in file:
+        risk_score += 10
+
+
 
     risk_score = min(risk_score, 100)
 
