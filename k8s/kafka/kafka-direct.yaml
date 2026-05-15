@@ -4,6 +4,20 @@ kind: Namespace
 metadata:
   name: kafka-system
 ---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data-pvc
+  namespace: kafka-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -74,5 +88,6 @@ spec:
               mountPath: /var/lib/kafka/data
       volumes:
         - name: kafka-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: kafka-data-pvc
 
