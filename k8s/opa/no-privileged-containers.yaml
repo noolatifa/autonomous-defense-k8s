@@ -22,6 +22,7 @@ kind: NoPrivileged
 metadata:
   name: no-privileged-containers
 spec:
+  enforcementAction: deny
   match:
     kinds:
       - apiGroups: [""]
