@@ -1,0 +1,26 @@
+---
+- name: 08 - Deploy OPA Gatekeeper
+  hosts: kubernetes
+  become: false
+
+  vars:
+    current_user: "{{ ansible_user }}"
+    current_user_home: "/home/{{ ansible_user }}"
+
+  environment:
+    KUBECONFIG: "{{ current_user_home }}/.kube/config"
+
+  tasks:
+
+    # 1. Install OPA Gatekeeper
+    - name: Install OPA Gatekeeper
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/v3.14.0/deploy/gatekeeper.yaml
+
+    # 2. Wait for Gatekeeper to be ready
+    - name: Wait for Gatekeeper to be ready
+      shell: |
+        kubectl wait --for=condition=Ready pod \
+          -l control-plane=controller-manager \
+          -n gatekeeper-system \
+          --timeout=120s
