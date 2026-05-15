@@ -6,6 +6,7 @@
   vars:
     current_user: "{{ ansible_user }}"
     current_user_home: "/home/{{ ansible_user }}"
+    opa_dir: "{{ current_user_home }}/autonomous-defense/k8s/opa"
 
   environment:
     KUBECONFIG: "{{ current_user_home }}/.kube/config"
@@ -24,3 +25,63 @@
           -l control-plane=controller-manager \
           -n gatekeeper-system \
           --timeout=120s
+
+
+
+
+    # 3. Create OPA manifests directory on remote
+    - name: Create OPA directory on remote
+      file:
+        path: "{{ opa_dir }}"
+        state: directory
+        mode: "0755"
+
+    # 4. Copy OPA policies
+    - name: Copy OPA policies to remote
+      copy:
+        src: "{{ item }}"
+        dest: "{{ opa_dir }}/{{ item | basename }}"
+        mode: "0644"
+      loop:
+        - "{{ playbook_dir }}/../../k8s/opa/no-root-containers.yaml"
+        - "{{ playbook_dir }}/../../k8s/opa/require-resource-limits.yaml"
+        - "{{ playbook_dir }}/../../k8s/opa/no-privileged-containers.yaml"
+
+    # !!!!!!!!!!!!!! Wait for CRDs to be ready
+    - name: Wait for noroot CRD
+      shell: kubectl wait --for=condition=Established crd/noroot.constraints.gatekeeper.sh --timeout=60s
+
+    - name: Wait for requireresourcelimits CRD
+      shell: kubectl wait --for=condition=Established crd/requireresourcelimits.constraints.gatekeeper.sh --timeout=60s
+
+    - name: Wait for noprivileged CRD
+      shell: kubectl wait --for=condition=Established crd/noprivileged.constraints.gatekeeper.sh --timeout=60s
+
+
+    # 5. Apply OPA policies
+    - name: Apply no-root-containers policy
+      shell: kubectl apply -f {{ opa_dir }}/no-root-containers.yaml
+
+    - name: Apply require-resource-limits policy
+      shell: kubectl apply -f {{ opa_dir }}/require-resource-limits.yaml
+
+    - name: Apply no-privileged-containers policy
+      shell: kubectl apply -f {{ opa_dir }}/no-privileged-containers.yaml
+
+    # 6. Verify Gatekeeper is running
+    - name: Verify Gatekeeper pods
+      shell: kubectl get pods -n gatekeeper-system
+      register: gatekeeper_pods
+
+    - name: Show Gatekeeper pods
+      debug:
+        msg: "{{ gatekeeper_pods.stdout_lines }}"
+
+    # 7. Verify policies applied
+    - name: Verify constraints applied
+      shell: kubectl get constraints
+      register: constraints
+
+    - name: Show constraints
+      debug:
+        msg: "{{ constraints.stdout_lines }}"
