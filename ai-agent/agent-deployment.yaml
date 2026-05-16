@@ -20,6 +20,9 @@ spec:
         - name: ai-agent
           image: ai-agent:latest
           imagePullPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
