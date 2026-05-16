@@ -23,6 +23,11 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groq-secret
+                  key: GROQ_API_KEY
           resources:
             requests:
               memory: "128Mi"
