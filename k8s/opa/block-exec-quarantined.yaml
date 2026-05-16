@@ -1,0 +1,31 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: blockexecquarantined
+spec:
+  crd:
+    spec:
+      names:
+        kind: BlockExecQuarantined
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package blockexecquarantined
+        violation[{"msg": msg}] {
+          input.review.operation == "CONNECT"
+          input.review.object.metadata.labels["security.status"] == "quarantined"
+          msg := "kubectl exec is blocked on quarantined pods"
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: BlockExecQuarantined
+metadata:
+  name: block-exec-quarantined
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces:
+      - apps
