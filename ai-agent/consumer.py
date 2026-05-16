@@ -31,13 +31,13 @@ while True:
         continue
     try:
         alert = json.loads(msg.value().decode("utf-8"))
-        analysis = analyze_alert(alert)
+        pod= (alert.get("output_fields") or {}).get("k8s.pod.name", "") or ""
+        if pod.startswith("ai-agent"):
 
-        if analysis.get("pod" or "").startswith("ai-agent"):
-            log.debug(f"Ignoring self-detection: {analysis['rule']}")
+            log.debug(f"Ignoring self-detection from pod {pod}")
             continue
 
-
+        analysis = analyze_alert(alert)
         decision = decide_action(analysis)
 
         log.info(f"ALERT  rule={analysis['rule']} score={analysis['risk_score']} "
