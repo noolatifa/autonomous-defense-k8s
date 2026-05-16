@@ -46,6 +46,8 @@
         - "{{ playbook_dir }}/../../k8s/opa/no-root-containers.yaml"
         - "{{ playbook_dir }}/../../k8s/opa/require-resource-limits.yaml"
         - "{{ playbook_dir }}/../../k8s/opa/no-privileged-containers.yaml"
+        - "{{ playbook_dir }}/../../k8s/opa/block-exec-quarantined.yaml"
+
 
     # !!!!!!!!!!!!!! Wait for CRDs to be ready
     - name: Wait for noroot CRD
@@ -67,6 +69,11 @@
 
     - name: Apply no-privileged-containers policy
       shell: kubectl apply -f {{ opa_dir }}/no-privileged-containers.yaml
+
+    - name: Apply block-exec-quarantined policy
+      shell: kubectl apply -f {{ opa_dir }}/block-exec-quarantined.yaml
+      ignore_errors: true
+
 
     # 6. Verify Gatekeeper is running
     - name: Verify Gatekeeper pods
