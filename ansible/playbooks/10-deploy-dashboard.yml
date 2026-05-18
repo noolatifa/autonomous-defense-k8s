@@ -1,0 +1,272 @@
+---
+# 10-deploy-dashboard.yml
+# Builds and deploys the defense dashboard pod that reads from:
+#   - agent-decisions topic  → audit log / live feed / stats
+#   - falco-alerts topic     → raw Falco event viewer
+#   - Kubernetes API         → pod list, network policies, agent logs
+# Exposes the UI on NodePort 31000.
+# Idempotent — safe to re-run.
+
+- name: "10 - Deploy Defense Dashboard"
+  hosts: k8s-cluster
+  become: false
+  environment:
+    KUBECONFIG: "/home/salma/.kube/config"
+  vars:
+    repo_path: "{{ ansible_env.HOME }}/autonomous-defense"
+    dashboard_path: "{{ repo_path }}/dashboard"
+    image_name: defense-dashboard
+    image_tag: latest
+    namespace: apps
+    nodeport: 31000
+
+  tasks:
+
+    # ── 1. Ensure dashboard directory and files exist ───────────────────────
+    - name: Create dashboard directory
+      file:
+        path: "{{ dashboard_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy dashboard app.py
+      copy:
+        src: "{{ playbook_dir }}/../../dashboard/app.py"
+        dest: "{{ dashboard_path }}/app.py"
+        mode: "0644"
+
+    - name: Copy dashboard.html
+      copy:
+        src: "{{ playbook_dir }}/../../dashboard/dashboard.html"
+        dest: "{{ dashboard_path }}/dashboard.html"
+        mode: "0644"
+
+    - name: Copy Dockerfile
+      copy:
+        src: "{{ playbook_dir }}/../../dashboard/Dockerfile"
+        dest: "{{ dashboard_path }}/Dockerfile"
+        mode: "0644"
+
+    # ── 2. Build Docker image ───────────────────────────────────────────────
+    - name: Build dashboard Docker image
+      shell: |
+        cd {{ dashboard_path }}
+        docker build -t {{ image_name }}:{{ image_tag }} .
+      register: build_result
+      changed_when: true
+
+    - name: Show build output
+      debug:
+        msg: "{{ build_result.stdout_lines[-5:] }}"
+
+    # ── 3. Import into containerd ───────────────────────────────────────────
+    - name: Import image into containerd (k8s.io namespace)
+      shell: >
+        docker save {{ image_name }}:{{ image_tag }}
+        | sudo ctr -n k8s.io images import -
+      changed_when: true
+
+    # ── 4. Apply RBAC ───────────────────────────────────────────────────────
+    - name: Apply dashboard ServiceAccount
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: dashboard
+          namespace: {{ namespace }}
+        EOF
+      changed_when: true
+
+    - name: Apply dashboard ClusterRole
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: dashboard-role
+        rules:
+          - apiGroups: [""]
+            resources: ["pods", "pods/log", "namespaces", "nodes"]
+            verbs: ["get", "list", "watch"]
+          - apiGroups: ["apps"]
+            resources: ["deployments", "replicasets"]
+            verbs: ["get", "list", "watch"]
+          - apiGroups: ["networking.k8s.io"]
+            resources: ["networkpolicies"]
+            verbs: ["get", "list", "watch"]
+        EOF
+      changed_when: true
+
+    - name: Apply dashboard ClusterRoleBinding
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: dashboard-binding
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: dashboard-role
+        subjects:
+          - kind: ServiceAccount
+            name: dashboard
+            namespace: {{ namespace }}
+        EOF
+      changed_when: true
+
+    # ── 5. Apply Deployment ─────────────────────────────────────────────────
+    - name: Apply dashboard Deployment
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: defense-dashboard
+          namespace: {{ namespace }}
+          labels:
+            app: defense-dashboard
+            component: observability
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: defense-dashboard
+          template:
+            metadata:
+              labels:
+                app: defense-dashboard
+            spec:
+              serviceAccountName: dashboard
+              containers:
+                - name: dashboard
+                  image: {{ image_name }}:{{ image_tag }}
+                  imagePullPolicy: Never
+                  ports:
+                    - containerPort: 5000
+                  resources:
+                    limits:
+                      cpu: "500m"
+                      memory: "256Mi"
+                    requests:
+                      cpu: "100m"
+                      memory: "128Mi"
+                  livenessProbe:
+                    httpGet:
+                      path: /api/stats
+                      port: 5000
+                    initialDelaySeconds: 15
+                    periodSeconds: 30
+                  readinessProbe:
+                    httpGet:
+                      path: /api/stats
+                      port: 5000
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+        EOF
+      changed_when: true
+
+    # ── 6. Apply Service ────────────────────────────────────────────────────
+    - name: Apply dashboard Service (NodePort)
+      shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: defense-dashboard
+          namespace: {{ namespace }}
+        spec:
+          type: NodePort
+          selector:
+            app: defense-dashboard
+          ports:
+            - port: 5000
+              targetPort: 5000
+              nodePort: {{ nodeport }}
+        EOF
+      changed_when: true
+
+    # ── 7. Restart if already running (pick up new image) ───────────────────
+    - name: Restart dashboard deployment to pick up new image
+      shell: kubectl rollout restart deployment/defense-dashboard -n {{ namespace }}
+      changed_when: true
+
+    # ── 8. Wait for dashboard pod to be ready ──────────────────────────────
+    - name: Wait for dashboard rollout to complete
+      shell: >
+        kubectl rollout status deployment/defense-dashboard
+        -n {{ namespace }} --timeout=120s
+      register: rollout_status
+      changed_when: false
+
+    - name: Show rollout status
+      debug:
+        msg: "{{ rollout_status.stdout }}"
+
+    # ── 9. Verify files are inside the container ────────────────────────────
+    - name: Get dashboard pod name
+      shell: >
+        kubectl get pod -n {{ namespace }}
+        -l app=defense-dashboard
+        -o jsonpath='{.items[0].metadata.name}'
+      register: dashboard_pod
+      changed_when: false
+
+    - name: Verify app.py and dashboard.html are inside container
+      shell: kubectl exec -n {{ namespace }} {{ dashboard_pod.stdout }} -- ls /app/
+      register: container_files
+      changed_when: false
+
+    - name: Show container files
+      debug:
+        msg: "{{ container_files.stdout_lines }}"
+
+    - name: Fail if dashboard.html is missing from container
+      fail:
+        msg: "dashboard.html not found in container — build may have failed"
+      when: "'dashboard.html' not in container_files.stdout"
+
+    # ── 10. Smoke test the API ──────────────────────────────────────────────
+    - name: Get cluster node IP
+      shell: kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+      register: node_ip
+      changed_when: false
+
+    - name: Smoke test /api/stats endpoint
+      shell: curl -sf http://{{ node_ip.stdout }}:{{ nodeport }}/api/stats
+      register: stats_response
+      changed_when: false
+      retries: 5
+      delay: 5
+      until: stats_response.rc == 0
+
+    - name: Show stats response
+      debug:
+        msg: "{{ stats_response.stdout }}"
+
+    - name: Smoke test /api/pods endpoint
+      shell: >
+        curl -sf http://{{ node_ip.stdout }}:{{ nodeport }}/api/pods
+        | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Pods visible: {len(d)}')"
+      register: pods_response
+      changed_when: false
+
+    - name: Show pods count
+      debug:
+        msg: "{{ pods_response.stdout }}"
+
+    # ── 11. Final summary ───────────────────────────────────────────────────
+    - name: Final summary
+      debug:
+        msg:
+          - "✅ Dashboard image built and deployed"
+          - "✅ RBAC configured (read-only K8s API access)"
+          - "✅ Kafka consumers running (falco-alerts + agent-decisions)"
+          - "✅ API endpoints verified"
+          - ""
+          - "🌐 Dashboard URL: http://{{ node_ip.stdout }}:{{ nodeport }}"
+          - ""
+          - "To test the full pipeline:"
+          - "  kubectl exec -it <web-cible-pod> -n apps -- cat /etc/shadow"
+          - "Then watch the dashboard Live Decision Feed update in real time."

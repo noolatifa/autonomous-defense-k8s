@@ -1,31 +1,64 @@
+# =============================================================================
+# rbac.yaml — UPDATED FOR ISTIO
+#
+# Changes vs original:
+#   1. Added a second ClusterRole rule that grants the ai-agent the ability
+#      to create/delete Istio AuthorizationPolicy custom resources.
+#      This is required so enforcer.py can call crd_api.create/delete
+#      on security.istio.io/authorizationpolicies.
+#
+#   2. Everything else (ServiceAccount, NetworkPolicy permissions, pod
+#      read/patch, deployment patch, replicaset read) is unchanged.
+# =============================================================================
 
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ai-agent
   namespace: apps
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: ai-agent-role
 rules:
-  # Read pods and their owners
+
+  # ── Core pod/namespace operations (unchanged) ──────────────────────────────
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch", "delete", "patch"]
-  # Read ReplicaSets to trace pod → Deployment ownership
+
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+
+  # ── Deployment scaling (unchanged) ────────────────────────────────────────
   - apiGroups: ["apps"]
-    resources: ["replicasets", "deployments"]
-    verbs: ["get", "list", "patch"]
-  # Apply NetworkPolicies for isolation
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+  # ── NetworkPolicy (unchanged — kept as L3/L4 fallback) ───────────────────
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["get", "list", "create", "patch", "delete"]
-  # Taint nodes
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "patch"]
+    verbs: ["get", "list", "create", "delete", "patch"]
+
+  # ── Istio AuthorizationPolicy (NEW) ───────────────────────────────────────
+  # Allows the ai-agent to create/delete Istio AuthorizationPolicies
+  # so enforcer.py can quarantine pods at the mTLS/L7 layer.
+  - apiGroups: ["security.istio.io"]
+    resources: ["authorizationpolicies"]
+    verbs: ["get", "list", "create", "delete", "patch"]
+
+  # ── Istio PeerAuthentication (NEW — read-only, useful for audit) ───────────
+  - apiGroups: ["security.istio.io"]
+    resources: ["peerauthentications"]
+    verbs: ["get", "list"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

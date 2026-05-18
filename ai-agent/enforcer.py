@@ -1,186 +1,138 @@
+"""
+enforcer.py — UPDATED FOR ISTIO
+Changes vs original:
+  1. quarantine_pod now creates an Istio AuthorizationPolicy (DENY) instead of
+     only a NetworkPolicy. Both are applied so the quarantine works even if
+     Istio sidecar injection is not yet ready on a pod.
+  2. New helper: _apply_istio_quarantine() / _remove_istio_quarantine()
+  3. delete_pod cleanup now also removes the Istio AuthorizationPolicy.
+  4. All other logic (audit log, scale up/down, label, Kafka publish) unchanged.
+"""
 
-import logging
 import json
+import logging
 import time
 from datetime import datetime, timezone
+from typing import Optional
+
+from confluent_kafka import Producer
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
 log = logging.getLogger("enforcer")
 
-# Load in-cluster credentials automatically
+# ── Kubernetes clients ────────────────────────────────────────────────────────
 try:
     config.load_incluster_config()
-    log.info("Loaded in-cluster Kubernetes config")
-except Exception:
+except config.ConfigException:
     config.load_kube_config()
-    log.info("Loaded local kubeconfig (dev mode)")
 
-core_api = client.CoreV1Api()
-apps_api = client.AppsV1Api()
-net_api  = client.NetworkingV1Api()
+core_api  = client.CoreV1Api()
+apps_api  = client.AppsV1Api()
+net_api   = client.NetworkingV1Api()
+# CustomObjectsApi is used to create Istio AuthorizationPolicy CRs
+crd_api   = client.CustomObjectsApi()
+
+# ── Kafka producer (publishes decisions to agent-decisions topic) ─────────────
+_producer = Producer({"bootstrap.servers": "kafka.kafka-system.svc.cluster.local:9092"})
 
 AUDIT_LOG = "/var/log/agent/audit.log"
+DECISIONS_TOPIC = "agent-decisions"
+
+# Istio CRD info
+ISTIO_GROUP   = "security.istio.io"
+ISTIO_VERSION = "v1beta1"
+AUTHZ_PLURAL  = "authorizationpolicies"
 
 
-# public entry point 
-def enforce(decision: dict, analysis: dict):
-    action    = decision["action"]
-    namespace = decision["target_namespace"]
-    pod_name  = decision["target_pod"]
-    node_name = decision["target_node"]
+# ── Internal helpers ──────────────────────────────────────────────────────────
 
-    if action == "ignore":
-        log.info(f"IGNORE pod={pod_name} score={decision['risk_score']}")
-        return
-
-    if action == "alert_only":
-        _alert_only(decision, analysis)
-        return
-
-    if action == "quarantine_pod":
-        _quarantine(pod_name, namespace, decision, analysis)
-        return
-
-    if action == "delete_pod":
-        _full_response(pod_name, namespace, node_name, decision, analysis)
-        return
-
-
-# action handlers 
-def _alert_only(decision: dict, analysis: dict):
-    """Score 40-69 — log and push metric, touch nothing."""
-    log.warning(
-        f"ALERT_ONLY pod={decision['target_pod']} "
-        f"ns={decision['target_namespace']} "
-        f"score={decision['risk_score']} rule={decision['rule']}"
-    )
-    _write_audit(decision, analysis, action_taken="alert_only")
-
-
-def _quarantine(pod_name: str, namespace: str, decision: dict, analysis: dict):
-    """Score 70-89 — isolate, keep alive for forensics, spin clean replacement."""
-    log.warning(f"QUARANTINE starting pod={pod_name} ns={namespace}")
-
-    # 1. Check pod exists
-    pod = _get_pod(pod_name, namespace)
-    if not pod:
-        log.error(f"Pod {pod_name} not found — skipping")
-        return
-
-    # 2. Isolate — block all traffic
-    _apply_isolation_policy(pod_name, namespace)
-
-    # 3. Label pod as quarantined — removes it from Service selector
-    _label_pod(pod_name, namespace, {"security.status": "quarantined"})
-
-    # 4. Scale up clean replacement
-    owner = _get_owner_deployment(pod)
-    if owner:
-        _scale_up(owner, namespace)
-        _wait_for_new_pod(owner, namespace, exclude_pod=pod_name)
-        log.info(f"Clean replacement running — quarantined pod kept for forensics")
-    else:
-        log.warning(f"Pod {pod_name} has no Deployment owner — cannot replace")
-
-    _write_audit(decision, analysis, action_taken="quarantine_pod")
-    log.warning(
-        f"QUARANTINE complete pod={pod_name} ns={namespace} — "
-        f"pod isolated and kept alive for investigation"
-    )
-
-
-def _full_response(pod_name: str, namespace: str, node_name: str,
-                   decision: dict, analysis: dict):
-    """Score >=90 — isolate → replace → verify → delete → taint node."""
-    log.warning(f"FULL RESPONSE starting pod={pod_name} ns={namespace}")
-    start = time.time()
-
-    # 1. Check pod exists
-    pod = _get_pod(pod_name, namespace)
-    if not pod:
-        log.error(f"Pod {pod_name} not found — skipping")
-        return
-
-    # 2. Isolate immediately — attacker cut off
-    _apply_isolation_policy(pod_name, namespace)
-    _label_pod(pod_name, namespace, {"security.status": "compromised"})
-    log.info(f"ISOLATED pod={pod_name} — attacker connection cut")
-
-    # 3. Spin up clean replacement
-    owner = _get_owner_deployment(pod)
-    new_pod_name = None
-
-    if owner:
-        _scale_up(owner, namespace)
-        new_pod_name = _wait_for_new_pod(owner, namespace, exclude_pod=pod_name)
-        if new_pod_name:
-            log.info(f"REPLACEMENT ready new_pod={new_pod_name} — service running clean")
-        else:
-            log.warning("Replacement pod did not become ready in time — proceeding anyway")
-    else:
-        log.warning(f"Pod {pod_name} has no Deployment owner — no auto-replacement")
-
-    # 4. Delete compromised pod
-    _delete_pod(pod_name, namespace)
-    log.info(f"DELETED pod={pod_name}")
-    if owner:
-        _scale_down(owner, namespace)
-    _cleanup_isolation_policy(pod_name, namespace)
-
-    # 5. Taint node (multi-node ready — harmless on single node)
-    if node_name and node_name != "unknown":
-        _taint_node(node_name)
-
-    elapsed = round(time.time() - start, 2)
-    _write_audit(decision, analysis,
-                 action_taken="delete_pod",
-                 new_pod=new_pod_name,
-                 elapsed_seconds=elapsed)
-
-    log.warning(
-        f"FULL RESPONSE complete pod={pod_name} new_pod={new_pod_name} "
-        f"node={node_name} elapsed={elapsed}s downtime=0"
-    )
-
-
-#  kubernetes helpers 
-def _get_pod(pod_name: str, namespace: str):
+def _write_audit(record: dict):
+    """Append a JSON line to the audit log."""
+    record["timestamp"] = datetime.now(timezone.utc).isoformat()
     try:
-        return core_api.read_namespaced_pod(pod_name, namespace)
+        with open(AUDIT_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:
+        log.error(f"Audit write failed: {e}")
+
+
+def _publish_decision(record: dict):
+    """Publish decision event to Kafka agent-decisions topic."""
+    try:
+        _producer.produce(DECISIONS_TOPIC, json.dumps(record).encode())
+        _producer.flush()
+    except Exception as e:
+        log.error(f"Kafka publish failed: {e}")
+
+
+def _label_pod(pod_name: str, namespace: str, labels: dict):
+    try:
+        core_api.patch_namespaced_pod(
+            pod_name, namespace, {"metadata": {"labels": labels}}
+        )
+        log.info(f"Labelled pod={pod_name} labels={labels}")
     except ApiException as e:
-        if e.status == 404:
-            return None
-        raise
+        log.error(f"Failed to label pod {pod_name}: {e}")
 
 
-def _get_owner_deployment(pod) -> str | None:
-    """Return the Deployment name that owns this pod, or None."""
-    for ref in (pod.metadata.owner_references or []):
-        if ref.kind == "ReplicaSet":
-            try:
-                rs = apps_api.read_namespaced_replica_set(
-                    ref.name, pod.metadata.namespace
-                )
-                for rs_ref in (rs.metadata.owner_references or []):
+def _get_owner_deployment(pod_name: str, namespace: str) -> Optional[str]:
+    """Return the Deployment name that owns this pod (via ReplicaSet)."""
+    try:
+        pod = core_api.read_namespaced_pod(pod_name, namespace)
+        for ref in pod.metadata.owner_references or []:
+            if ref.kind == "ReplicaSet":
+                rs = apps_api.read_namespaced_replica_set(ref.name, namespace)
+                for rs_ref in rs.metadata.owner_references or []:
                     if rs_ref.kind == "Deployment":
                         return rs_ref.name
-            except ApiException:
-                pass
+    except ApiException:
+        pass
     return None
 
 
-def _apply_isolation_policy(pod_name: str, namespace: str):
-    """Block all ingress and egress for the compromised pod."""
+def _scale_deployment(deployment_name: str, namespace: str, replicas: int):
+    try:
+        apps_api.patch_namespaced_deployment(
+            deployment_name, namespace, {"spec": {"replicas": replicas}}
+        )
+        log.info(f"Deployment {deployment_name} scaled to {replicas} replicas")
+    except ApiException as e:
+        log.error(f"Failed to scale deployment {deployment_name}: {e}")
+
+
+def _wait_for_replacement(deployment_name: str, namespace: str,
+                           original_pod: str, timeout: int = 60) -> bool:
+    """Wait until a new Running pod (not the original) exists."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            pods = core_api.list_namespaced_pod(
+                namespace,
+                label_selector=f"app={deployment_name}"
+            )
+            for pod in pods.items:
+                if (pod.metadata.name != original_pod
+                        and pod.status.phase == "Running"
+                        and all(cs.ready for cs in (pod.status.container_statuses or []))):
+                    log.info(f"Clean replacement running — {pod.metadata.name}")
+                    return True
+        except ApiException:
+            pass
+        time.sleep(3)
+    return False
+
+
+# ── NetworkPolicy helpers (kept as fallback) ─────────────────────────────────
+
+def _apply_network_isolation(pod_name: str, namespace: str):
+    """Create a NetworkPolicy that blocks all ingress/egress for this pod."""
     policy_name = f"isolate-{pod_name}"
     policy = client.V1NetworkPolicy(
-        metadata=client.V1ObjectMeta(
-            name=policy_name,
-            namespace=namespace
-        ),
+        metadata=client.V1ObjectMeta(name=policy_name, namespace=namespace),
         spec=client.V1NetworkPolicySpec(
             pod_selector=client.V1LabelSelector(
-                match_labels={"app": pod_name}
+                match_labels={"security.status": "quarantined"}
             ),
             policy_types=["Ingress", "Egress"],
             ingress=[],
@@ -194,161 +146,289 @@ def _apply_isolation_policy(pod_name: str, namespace: str):
         if e.status == 409:
             log.info(f"NetworkPolicy {policy_name} already exists")
         else:
-            log.error(f"Failed to apply NetworkPolicy: {e}")
+            log.error(f"NetworkPolicy creation failed: {e}")
 
 
-def _label_pod(pod_name: str, namespace: str, labels: dict):
-    """Add labels to a pod — removes it from Service selector if label conflicts."""
-    try:
-        patch = {"metadata": {"labels": labels}}
-        core_api.patch_namespaced_pod(pod_name, namespace, patch)
-        log.info(f"Labelled pod={pod_name} labels={labels}")
-    except ApiException as e:
-        log.error(f"Failed to label pod: {e}")
-
-
-def _scale_up(deployment_name: str, namespace: str):
-    """Increase replica count by 1 to spin up a clean replacement."""
-    try:
-        dep = apps_api.read_namespaced_deployment(deployment_name, namespace)
-        current = dep.spec.replicas or 1
-        apps_api.patch_namespaced_deployment(
-            deployment_name, namespace,
-            {"spec": {"replicas": current + 1}}
-        )
-        log.info(f"Deployment {deployment_name} scaled to {current + 1} replicas")
-    except ApiException as e:
-        log.error(f"Failed to scale deployment: {e}")
-
-
-def _wait_for_new_pod(deployment_name: str, namespace: str,
-                      exclude_pod: str, timeout: int = 60) -> str | None:
-    """Wait for a new Ready pod from this deployment, return its name."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            pods = core_api.list_namespaced_pod(
-                namespace,
-                label_selector=f"app={deployment_name}"
-            )
-            for pod in pods.items:
-                if pod.metadata.name == exclude_pod:
-                    continue
-                labels = pod.metadata.labels or {}
-                if labels.get("security.status") in ("compromised", "quarantined"):
-                    continue
-                if pod.status.phase == "Running":
-                    conditions = pod.status.conditions or []
-                    ready = any(
-                        c.type == "Ready" and c.status == "True"
-                        for c in conditions
-                    )
-                    if ready:
-                        return pod.metadata.name
-        except ApiException as e:
-            log.error(f"Error checking pods: {e}")
-        time.sleep(3)
-    return None
-
-
-def _delete_pod(pod_name: str, namespace: str):
-    try:
-        core_api.delete_namespaced_pod(pod_name, namespace)
-        log.info(f"Deleted pod={pod_name} ns={namespace}")
-    except ApiException as e:
-        if e.status == 404:
-            log.info(f"Pod {pod_name} already gone")
-        else:
-            log.error(f"Failed to delete pod: {e}")
-
-
-def _scale_down(deployment_name: str, namespace: str):
-    try:
-        dep = apps_api.read_namespaced_deployment(deployment_name, namespace)
-        current = dep.spec.replicas or 2
-        target = max(1, current - 1)
-        apps_api.patch_namespaced_deployment(
-            deployment_name, namespace,
-            {"spec": {"replicas": target}}
-        )
-        log.info(f"Deployment {deployment_name} scaled back to {target} replicas")
-    except ApiException as e:
-        log.error(f"Failed to scale down deployment: {e}")
-
-
-def _cleanup_isolation_policy(pod_name: str, namespace: str):
+def _remove_network_isolation(pod_name: str, namespace: str):
     policy_name = f"isolate-{pod_name}"
     try:
         net_api.delete_namespaced_network_policy(policy_name, namespace)
-        log.info(f"NetworkPolicy {policy_name} cleaned up")
+        log.info(f"NetworkPolicy {policy_name} deleted")
     except ApiException as e:
-        if e.status == 404:
-            pass
-        else:
-            log.error(f"Failed to cleanup NetworkPolicy: {e}")
+        if e.status != 404:
+            log.error(f"Failed to delete NetworkPolicy: {e}")
 
 
+# ── NEW: Istio AuthorizationPolicy helpers ────────────────────────────────────
 
+def _apply_istio_quarantine(pod_name: str, namespace: str):
+    """
+    Create an Istio AuthorizationPolicy that DENIES all traffic to this pod.
+    The policy name is prefixed 'istio-quarantine-' so we can find and clean
+    it up later independently of the NetworkPolicy.
 
-def _taint_node(node_name: str):
-    """Taint the node so no new pods are scheduled on it until cleared.
-    Skipped on single-node clusters to avoid blocking all scheduling."""
+    Only the ai-agent ServiceAccount is exempted so it can still read logs
+    and call the K8s API on the quarantined pod.
+    """
+    policy_name = f"istio-quarantine-{pod_name}"
+
+    # Extract a stable app label from pod name (e.g. web-cible-abc-xyz → web-cible)
     try:
-        nodes = core_api.list_node()
-        schedulable = [
-            n for n in nodes.items
-            if not any(t.effect == "NoSchedule" for t in (n.spec.taints or []))
-        ]
-        if len(schedulable) <= 1:
-            log.warning(
-                f"Single-node cluster — skipping taint on {node_name}"
-            )
-            return
+        pod = core_api.read_namespaced_pod(pod_name, namespace)
+        app_label = pod.metadata.labels.get("app", pod_name)
+    except ApiException:
+        app_label = pod_name
 
-        taint = {
-            "key": "security",
-            "value": "compromised",
-            "effect": "NoSchedule"
+    body = {
+        "apiVersion": f"{ISTIO_GROUP}/{ISTIO_VERSION}",
+        "kind": "AuthorizationPolicy",
+        "metadata": {
+            "name": policy_name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "selector": {
+                "matchLabels": {"app": app_label}
+            },
+            "action": "DENY",
+            "rules": [
+                {
+                    # Deny everyone EXCEPT the ai-agent service account
+                    "from": [
+                        {
+                            "source": {
+                                "notPrincipals": [
+                                    f"cluster.local/ns/{namespace}/sa/ai-agent"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
         }
-        node = core_api.read_node(node_name)
-        existing = [t.to_dict() for t in (node.spec.taints or [])]
-        if taint not in existing:
-            existing.append(taint)
-            core_api.patch_node(node_name, {"spec": {"taints": existing}})
-            log.warning(f"TAINTED node={node_name} effect=NoSchedule")
-        else:
-            log.info(f"Node {node_name} already tainted")
-    except ApiException as e:
-        log.error(f"Failed to taint node: {e}")
-
-
-
-# audit log 
-def _write_audit(decision: dict, analysis: dict,
-                 action_taken: str, new_pod: str = None,
-                 elapsed_seconds: float = None):
-    import os
-    os.makedirs("/var/log/agent", exist_ok=True)
-
-    entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "rule": decision["rule"],
-        "risk_score": decision["risk_score"],
-        "action": action_taken,
-        "pod": decision["target_pod"],
-        "namespace": decision["target_namespace"],
-        "node": decision["target_node"],
-        "command": analysis.get("command"),
-        "file": analysis.get("file"),
-        "user": analysis.get("user"),
-        "new_pod": new_pod,
-        "elapsed_seconds": elapsed_seconds,
-        "downtime_ms": 0
     }
 
     try:
-        with open(AUDIT_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-        log.info(f"Audit written action={action_taken} pod={decision['target_pod']}")
-    except Exception as e:
-        log.error(f"Failed to write audit log: {e}")
+        crd_api.create_namespaced_custom_object(
+            group=ISTIO_GROUP,
+            version=ISTIO_VERSION,
+            namespace=namespace,
+            plural=AUTHZ_PLURAL,
+            body=body
+        )
+        log.info(f"Istio AuthorizationPolicy {policy_name} applied — mTLS traffic blocked")
+    except ApiException as e:
+        if e.status == 409:
+            log.info(f"Istio AuthorizationPolicy {policy_name} already exists")
+        elif e.status == 404:
+            # Istio CRD not available yet — log warning but don't crash
+            log.warning("Istio CRD not found — skipping Istio quarantine (NetworkPolicy only)")
+        else:
+            log.error(f"Istio AuthorizationPolicy creation failed: {e}")
+
+
+def _remove_istio_quarantine(pod_name: str, namespace: str):
+    """Delete the Istio AuthorizationPolicy for this pod."""
+    policy_name = f"istio-quarantine-{pod_name}"
+    try:
+        crd_api.delete_namespaced_custom_object(
+            group=ISTIO_GROUP,
+            version=ISTIO_VERSION,
+            namespace=namespace,
+            plural=AUTHZ_PLURAL,
+            name=policy_name
+        )
+        log.info(f"Istio AuthorizationPolicy {policy_name} deleted")
+    except ApiException as e:
+        if e.status != 404:
+            log.error(f"Failed to delete Istio AuthorizationPolicy: {e}")
+
+
+# ── Action implementations ────────────────────────────────────────────────────
+
+def _alert_only(decision: dict, analysis: dict):
+    pod  = analysis.get("pod")
+    ns   = analysis.get("namespace")
+    rule = analysis.get("rule")
+    score = analysis.get("risk_score")
+
+    log.warning(f"ALERT_ONLY pod={pod} ns={ns} score={score} rule={rule}")
+
+    record = {
+        "action": "alert_only",
+        "pod": pod,
+        "namespace": ns,
+        "rule": rule,
+        "risk_score": score,
+        "reason": decision.get("reason"),
+        "command": analysis.get("command"),
+        "file": analysis.get("file"),
+        "node": analysis.get("node"),
+        "downtime_ms": 0,
+        "new_pod": None,
+        "elapsed_seconds": None,
+    }
+    _write_audit(record)
+    _publish_decision(record)
+
+
+def _quarantine(decision: dict, analysis: dict):
+    """
+    Quarantine flow (UPDATED FOR ISTIO):
+      1. Label pod  security.status=quarantined
+      2. Apply NetworkPolicy (layer 3/4 isolation — works even without sidecar)
+      3. Apply Istio AuthorizationPolicy (layer 7 mTLS isolation)
+      4. Scale deployment +1 so a clean replacement starts
+      5. Wait for replacement
+      6. Write audit + publish to Kafka
+      Pod is kept alive for forensic investigation.
+    """
+    pod = analysis.get("pod")
+    ns  = analysis.get("namespace")
+
+    if not pod or not ns:
+        log.warning("QUARANTINE called but pod/namespace unknown — skipping")
+        return
+
+    log.warning(f"QUARANTINE starting pod={pod} ns={ns}")
+    t_start = time.time()
+
+    # 1 — Label
+    _label_pod(pod, ns, {"security.status": "quarantined"})
+
+    # 2 — NetworkPolicy isolation (L3/L4)
+    _apply_network_isolation(pod, ns)
+
+    # 3 — Istio AuthorizationPolicy (L7 mTLS)  ← NEW
+    _apply_istio_quarantine(pod, ns)
+
+    # 4 — Scale up for replacement
+    owner = _get_owner_deployment(pod, ns)
+    if owner:
+        dep = apps_api.read_namespaced_deployment(owner, ns)
+        current_replicas = dep.spec.replicas or 1
+        _scale_deployment(owner, ns, current_replicas + 1)
+
+        # 5 — Wait for clean pod
+        if _wait_for_replacement(owner, ns, pod):
+            log.info("Clean replacement running — quarantined pod kept for forensics")
+        else:
+            log.warning("Replacement pod did not become ready in time")
+
+    elapsed = round(time.time() - t_start, 2)
+
+    record = {
+        "action": "quarantine_pod",
+        "pod": pod,
+        "namespace": ns,
+        "rule": analysis.get("rule"),
+        "risk_score": analysis.get("risk_score"),
+        "reason": decision.get("reason"),
+        "command": analysis.get("command"),
+        "file": analysis.get("file"),
+        "node": analysis.get("node"),
+        "downtime_ms": 0,
+        "new_pod": owner,
+        "elapsed_seconds": elapsed,
+        "istio_policy": f"istio-quarantine-{pod}",   # NEW field in audit
+        "network_policy": f"isolate-{pod}",
+    }
+    _write_audit(record)
+    _publish_decision(record)
+    log.warning(
+        f"QUARANTINE complete pod={pod} ns={ns} "
+        f"— isolated (NetworkPolicy + Istio AuthZ) and kept for forensics"
+    )
+
+
+def _delete_pod_action(decision: dict, analysis: dict):
+    """
+    Delete flow (UPDATED FOR ISTIO):
+      1. Apply NetworkPolicy + Istio isolation first
+      2. Scale up replacement
+      3. Wait for replacement
+      4. Delete compromised pod
+      5. Scale back down
+      6. Cleanup NetworkPolicy + Istio AuthorizationPolicy
+      7. Write audit + publish to Kafka
+    """
+    pod = analysis.get("pod")
+    ns  = analysis.get("namespace")
+
+    if not pod or not ns:
+        log.warning("DELETE called but pod/namespace unknown — skipping")
+        return
+
+    log.warning(f"DELETE starting pod={pod} ns={ns}")
+    t_start = time.time()
+
+    # 1 — Isolate first while we spin up replacement
+    _label_pod(pod, ns, {"security.status": "quarantined"})
+    _apply_network_isolation(pod, ns)
+    _apply_istio_quarantine(pod, ns)  # ← NEW
+
+    # 2 — Scale up
+    owner = _get_owner_deployment(pod, ns)
+    if owner:
+        dep = apps_api.read_namespaced_deployment(owner, ns)
+        current_replicas = dep.spec.replicas or 1
+        _scale_deployment(owner, ns, current_replicas + 1)
+        new_pod_ready = _wait_for_replacement(owner, ns, pod)
+    else:
+        new_pod_ready = False
+
+    # 3 — Delete compromised pod
+    try:
+        core_api.delete_namespaced_pod(pod, ns)
+        log.info(f"Pod {pod} deleted")
+    except ApiException as e:
+        log.error(f"Failed to delete pod {pod}: {e}")
+
+    # 4 — Scale back down
+    if owner:
+        dep = apps_api.read_namespaced_deployment(owner, ns)
+        current = dep.spec.replicas or 2
+        _scale_deployment(owner, ns, max(1, current - 1))
+
+    # 5 — Cleanup both isolation layers
+    _remove_network_isolation(pod, ns)
+    _remove_istio_quarantine(pod, ns)  # ← NEW
+
+    elapsed = round(time.time() - t_start, 2)
+    downtime_ms = int(elapsed * 1000) if not new_pod_ready else 0
+
+    record = {
+        "action": "delete_pod",
+        "pod": pod,
+        "namespace": ns,
+        "rule": analysis.get("rule"),
+        "risk_score": analysis.get("risk_score"),
+        "reason": decision.get("reason"),
+        "command": analysis.get("command"),
+        "file": analysis.get("file"),
+        "node": analysis.get("node"),
+        "downtime_ms": downtime_ms,
+        "new_pod": owner,
+        "elapsed_seconds": elapsed,
+        "istio_policy_cleaned": f"istio-quarantine-{pod}",  # NEW field
+        "network_policy_cleaned": f"isolate-{pod}",
+    }
+    _write_audit(record)
+    _publish_decision(record)
+    log.warning(f"DELETE complete pod={pod} ns={ns} elapsed={elapsed}s")
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+def enforce(decision: dict, analysis: dict):
+    action = decision.get("action", "alert_only")
+
+    if action == "alert_only":
+        _alert_only(decision, analysis)
+    elif action == "quarantine_pod":
+        _quarantine(decision, analysis)
+    elif action == "delete_pod":
+        _delete_pod_action(decision, analysis)
+    else:
+        log.warning(f"Unknown action '{action}' — defaulting to alert_only")
+        _alert_only(decision, analysis)

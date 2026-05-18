@@ -1,0 +1,265 @@
+---
+# =============================================================================
+# PLAYBOOK 09 — Deploy Istio Service Mesh (Zero-Trust Layer)
+# Run: ansible-playbook -i inventory/hosts.ini playbooks/09-deploy-istio.yml
+# =============================================================================
+- name: 09 - Deploy Istio Service Mesh
+  hosts: k8s-cluster
+  become: true
+  vars:
+    istio_version: "1.29.2"
+    istio_dir: "/tmp/istio-{{ istio_version }}"
+    istio_download_url: "https://github.com/istio/istio/releases/download/{{ istio_version }}/istio-{{ istio_version }}-linux-amd64.tar.gz"
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # STEP 1 — Download and install istioctl
+    # -------------------------------------------------------------------------
+    - name: Download Istio
+      get_url:
+        url: "{{ istio_download_url }}"
+        dest: /tmp/istio.tar.gz
+        mode: '0644'
+
+    - name: Extract Istio
+      unarchive:
+        src: /tmp/istio.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+          #    - name: Install istioctl to /usr/local/bin
+          #    become: true
+          # copy:
+          # src: "{{ istio_dir }}/bin/istioctl"
+          #        dest: /usr/local/bin/istioctl
+          #        mode: '0755'
+          #        remote_src: yes
+    - name: Install istioctl to /usr/local/bin
+      shell: |
+        sudo cp {{ istio_dir }}/bin/istioctl /usr/local/bin/istioctl
+        sudo chmod 0755 /usr/local/bin/istioctl
+
+    - name: Verify istioctl version
+      command: istioctl version --remote=false
+      register: istio_version_out
+      changed_when: false
+
+    - name: Print istioctl version
+      debug:
+        msg: "{{ istio_version_out.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # STEP 2 — Install Istio control plane (minimal profile)
+    # -------------------------------------------------------------------------
+    - name: Install Istio control plane
+      command: >
+        istioctl install
+        --set profile=default
+        --set values.pilot.resources.requests.memory=256Mi
+        --set values.pilot.resources.requests.cpu=100m
+        -y
+      register: istio_install
+      changed_when: "'already installed' not in istio_install.stdout"
+
+    - name: Wait for Istio control plane to be ready
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -n istio-system -l app=istiod
+        --timeout=180s
+      changed_when: false
+
+    - name: Wait for Istio ingress gateway
+      command: >
+        kubectl wait --for=condition=Ready pod
+        -n istio-system -l app=istio-ingressgateway
+        --timeout=120s
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # STEP 3 — Enable sidecar injection on the apps namespace
+    # -------------------------------------------------------------------------
+    - name: Enable Istio sidecar injection on apps namespace
+      command: kubectl label namespace apps istio-injection=enabled --overwrite
+      register: label_out
+      changed_when: "'labeled' in label_out.stdout or 'not labeled' not in label_out.stdout"
+
+    - name: Verify injection label
+      command: kubectl get namespace apps --show-labels
+      register: ns_labels
+      changed_when: false
+
+    - name: Print namespace labels
+      debug:
+        msg: "{{ ns_labels.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # STEP 4 — Restart pods in apps namespace to inject sidecars
+    # -------------------------------------------------------------------------
+    - name: Restart ai-agent deployment to inject Envoy sidecar
+      command: kubectl rollout restart deployment ai-agent -n apps
+
+    - name: Restart web-cible deployment to inject Envoy sidecar
+      command: kubectl rollout restart deployment web-cible -n apps
+
+    - name: Restart defense-dashboard deployment (if exists)
+      command: kubectl rollout restart deployment defense-dashboard -n apps
+      ignore_errors: yes
+
+    - name: Wait for ai-agent rollout to complete
+      command: kubectl rollout status deployment/ai-agent -n apps --timeout=120s
+      changed_when: false
+
+    - name: Wait for web-cible rollout to complete
+      command: kubectl rollout status deployment/web-cible -n apps --timeout=120s
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # STEP 5 — Apply Istio AuthorizationPolicies
+    # -------------------------------------------------------------------------
+    - name: Create Istio policies directory on remote
+      file:
+        path: /tmp/istio-policies
+        state: directory
+        mode: '0755'
+
+    # Default deny-all: no pod in 'apps' talks to any other unless explicitly allowed
+    - name: Copy deny-all AuthorizationPolicy
+      copy:
+        dest: /tmp/istio-policies/deny-all.yaml
+        content: |
+          apiVersion: security.istio.io/v1beta1
+          kind: AuthorizationPolicy
+          metadata:
+            name: deny-all
+            namespace: apps
+          spec: {}
+
+    # Allow ai-agent to talk to Kafka (kafka-system namespace)
+    - name: Copy allow-agent-to-kafka AuthorizationPolicy
+      copy:
+        dest: /tmp/istio-policies/allow-agent-kafka.yaml
+        content: |
+          apiVersion: security.istio.io/v1beta1
+          kind: AuthorizationPolicy
+          metadata:
+            name: allow-agent-to-kafka
+            namespace: kafka-system
+          spec:
+            action: ALLOW
+            rules:
+              - from:
+                  - source:
+                      principals:
+                        - "cluster.local/ns/apps/sa/ai-agent"
+
+    # Allow web traffic into web-cible (for attack simulation)
+    - name: Copy allow-web-cible-ingress AuthorizationPolicy
+      copy:
+        dest: /tmp/istio-policies/allow-web-cible.yaml
+        content: |
+          apiVersion: security.istio.io/v1beta1
+          kind: AuthorizationPolicy
+          metadata:
+            name: allow-web-cible-ingress
+            namespace: apps
+          spec:
+            selector:
+              matchLabels:
+                app: web-cible
+            action: ALLOW
+            rules:
+              - from:
+                  - source:
+                      namespaces: ["apps", "default"]
+
+    # Allow dashboard to talk to the K8s API and ai-agent logs
+    - name: Copy allow-dashboard AuthorizationPolicy
+      copy:
+        dest: /tmp/istio-policies/allow-dashboard.yaml
+        content: |
+          apiVersion: security.istio.io/v1beta1
+          kind: AuthorizationPolicy
+          metadata:
+            name: allow-dashboard-internal
+            namespace: apps
+          spec:
+            selector:
+              matchLabels:
+                app: defense-dashboard
+            action: ALLOW
+            rules:
+              - from:
+                  - source:
+                      namespaces: ["apps", "default"]
+
+    - name: Apply deny-all policy
+      command: kubectl apply -f /tmp/istio-policies/deny-all.yaml
+
+    - name: Apply allow-agent-to-kafka policy
+      command: kubectl apply -f /tmp/istio-policies/allow-agent-kafka.yaml
+
+    - name: Apply allow-web-cible policy
+      command: kubectl apply -f /tmp/istio-policies/allow-web-cible.yaml
+
+    - name: Apply allow-dashboard policy
+      command: kubectl apply -f /tmp/istio-policies/allow-dashboard.yaml
+
+    # -------------------------------------------------------------------------
+    # STEP 6 — Enable mTLS strict mode in apps namespace
+    # -------------------------------------------------------------------------
+    - name: Apply PeerAuthentication (mTLS strict)
+      copy:
+        dest: /tmp/istio-policies/peer-auth.yaml
+        content: |
+          apiVersion: security.istio.io/v1beta1
+          kind: PeerAuthentication
+          metadata:
+            name: default
+            namespace: apps
+          spec:
+            mtls:
+              mode: STRICT
+
+    - name: Apply mTLS strict mode
+      command: kubectl apply -f /tmp/istio-policies/peer-auth.yaml
+
+    # -------------------------------------------------------------------------
+    # STEP 7 — Verify everything
+    # -------------------------------------------------------------------------
+    - name: Check all pods have 2 containers (app + envoy sidecar)
+      command: kubectl get pods -n apps
+      register: pods_out
+      changed_when: false
+
+    - name: Print pod status
+      debug:
+        msg: "{{ pods_out.stdout }}"
+
+    - name: Check AuthorizationPolicies applied
+      command: kubectl get authorizationpolicy -n apps
+      register: authz_out
+      changed_when: false
+
+    - name: Print AuthorizationPolicies
+      debug:
+        msg: "{{ authz_out.stdout }}"
+
+    - name: Check PeerAuthentication
+      command: kubectl get peerauthentication -n apps
+      register: mtls_out
+      changed_when: false
+
+    - name: Print PeerAuthentication status
+      debug:
+        msg: "{{ mtls_out.stdout }}"
+
+    - name: Verify mTLS is active (check proxy status)
+      command: istioctl proxy-status
+      register: proxy_status
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Print proxy status
+      debug:
+        msg: "{{ proxy_status.stdout }}"

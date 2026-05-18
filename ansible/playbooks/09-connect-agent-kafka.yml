@@ -1,0 +1,144 @@
+---
+# 09-connect-agent-kafka.yml
+# Rebuilds the ai-agent image with the updated enforcer.py that publishes
+# decisions to the agent-decisions Kafka topic, then rolls out the new image.
+# Idempotent — safe to re-run.
+
+- name: "09 - Connect AI Agent to Kafka (agent-decisions topic)"
+  hosts: k8s-cluster
+  become: false
+  environment:
+    KUBECONFIG: "/home/salma/.kube/config"
+  vars:
+    repo_path: "{{ ansible_env.HOME }}/autonomous-defense"
+    ai_agent_path: "{{ repo_path }}/ai-agent"
+    kafka_namespace: kafka-system
+    kafka_deployment: kafka
+    kafka_bootstrap: "kafka.kafka-system.svc.cluster.local:9092"
+    agent_decisions_topic: agent-decisions
+    image_name: ai-agent
+    image_tag: latest
+    kubeconfig: "/home/salma/.kube/config"
+  tasks:
+
+    # ── 1. Verify Kafka is running ──────────────────────────────────────────
+    - name: Wait for Kafka pod to be ready
+      shell: >
+        kubectl wait --for=condition=Ready pod
+        -l app=kafka
+        -n {{ kafka_namespace }}
+        --timeout=60s
+      changed_when: false
+
+    # ── 2. Create agent-decisions topic (idempotent) ────────────────────────
+    - name: Check if agent-decisions topic already exists
+      shell: >
+        kubectl exec -n {{ kafka_namespace }}
+        deployment/{{ kafka_deployment }} --
+        kafka-topics --list
+        --bootstrap-server localhost:9092
+      register: existing_topics
+      changed_when: false
+
+    - name: Create agent-decisions Kafka topic
+      shell: >
+        kubectl exec -n {{ kafka_namespace }}
+        deployment/{{ kafka_deployment }} --
+        kafka-topics --create
+        --bootstrap-server localhost:9092
+        --topic {{ agent_decisions_topic }}
+        --partitions 1
+        --replication-factor 1
+      when: agent_decisions_topic not in existing_topics.stdout
+
+    - name: Verify agent-decisions topic exists
+      shell: >
+        kubectl exec -n {{ kafka_namespace }}
+        deployment/{{ kafka_deployment }} --
+        kafka-topics --describe
+        --bootstrap-server localhost:9092
+        --topic {{ agent_decisions_topic }}
+      register: topic_info
+      changed_when: false
+
+    - name: Show topic info
+      debug:
+        msg: "{{ topic_info.stdout_lines }}"
+
+    # ── 3. Copy updated enforcer.py ─────────────────────────────────────────
+    - name: Copy updated enforcer.py with Kafka publishing
+      copy:
+        src: "{{ playbook_dir }}/../../ai-agent/enforcer.py"
+        dest: "{{ ai_agent_path }}/enforcer.py"
+        mode: "0644"
+      register: enforcer_updated
+
+    # ── 4. Rebuild Docker image ─────────────────────────────────────────────
+    - name: Build ai-agent Docker image
+      shell: |
+        cd {{ ai_agent_path }}
+        docker build -t {{ image_name }}:{{ image_tag }} .
+      register: build_result
+      changed_when: true
+
+    - name: Show build output
+      debug:
+        msg: "{{ build_result.stdout_lines[-5:] }}"
+
+    # ── 5. Import image into containerd k8s.io namespace ───────────────────
+    - name: Import image into containerd (k8s.io namespace)
+      shell: >
+        docker save {{ image_name }}:{{ image_tag }}
+        | sudo ctr -n k8s.io images import -
+      changed_when: true
+
+    # ── 6. Ensure /var/log/agent exists with correct permissions ───────────
+    - name: Create /var/log/agent on host with open permissions
+      file:
+        path: /var/log/agent
+        state: directory
+        mode: "0777"
+      become: true
+
+    # ── 7. Roll out new ai-agent deployment ────────────────────────────────
+    - name: Restart ai-agent deployment
+      shell: kubectl rollout restart deployment/ai-agent -n apps
+      changed_when: true
+
+    - name: Wait for ai-agent rollout to complete
+      shell: >
+        kubectl rollout status deployment/ai-agent
+        -n apps --timeout=120s
+      register: rollout_status
+      changed_when: false
+
+    - name: Show rollout status
+      debug:
+        msg: "{{ rollout_status.stdout }}"
+
+    # ── 8. Smoke test — verify agent pod is running ────────────────────────
+    - name: Get ai-agent pod name
+      shell: >
+        kubectl get pod -n apps -l app=ai-agent
+        -o jsonpath='{.items[0].metadata.name}'
+      register: agent_pod
+      changed_when: false
+
+    - name: Verify agent is consuming from falco-alerts
+      shell: >
+        kubectl logs -n apps {{ agent_pod.stdout }} --tail=5
+      register: agent_logs
+      changed_when: false
+
+    - name: Show recent agent logs
+      debug:
+        msg: "{{ agent_logs.stdout_lines }}"
+
+    - name: Summary
+      debug:
+        msg:
+          - "✅ Kafka topic '{{ agent_decisions_topic }}' ready"
+          - "✅ enforcer.py updated with Kafka publishing"
+          - "✅ ai-agent image rebuilt and deployed"
+          - "✅ /var/log/agent created on host"
+          - "➡  Trigger an attack to verify: kubectl exec -it <web-cible-pod> -n apps -- cat /etc/shadow"

@@ -14,34 +14,45 @@ spec:
     metadata:
       labels:
         app: ai-agent
+      annotations:
+        # ── NEW: explicitly request Istio sidecar injection ──────────────────
+        sidecar.istio.io/inject: "true"
+        # Exclude Kafka port from Istio interception (Kafka uses its own auth)
+        traffic.sidecar.istio.io/excludeOutboundPorts: "9092"
     spec:
+      # ServiceAccount must match the principal in AuthorizationPolicy rules
       serviceAccountName: ai-agent
+
       containers:
         - name: ai-agent
           image: ai-agent:latest
           imagePullPolicy: Never
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
+
           env:
-            - name: PYTHONUNBUFFERED
-              value: "1"
             - name: GROQ_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: groq-secret
                   key: GROQ_API_KEY
+
+            # ── NEW: tells enforcer.py Istio is available ─────────────────
+            - name: ISTIO_ENABLED
+              value: "true"
+
           resources:
             requests:
               memory: "128Mi"
               cpu: "100m"
             limits:
-              memory: "256Mi"
-              cpu: "200m"
+              memory: "512Mi"
+              cpu: "500m"
+
           volumeMounts:
             - name: audit-log
               mountPath: /var/log/agent
+
       volumes:
         - name: audit-log
-          emptyDir: {}
-      restartPolicy: Always
+          hostPath:
+            path: /var/log/agent
+            type: DirectoryOrCreate

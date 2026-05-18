@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>K8s Autonomous Defense Dashboard</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet">
+  <script type="text/javascript"
+    src="https://ff.kis.v2.scr.kaspersky-labs.com/FD126C42-EBFA-4E12-B309-BB3FDD723AC1/main.js?attr=ODr3WAR9hvBHWucHKSpTcN4etBQqVEHojF1MvzoCOtYLPxZZs2LlHA7u4CAHGFlcgnqDMMERpSAMXtG5nMT4y39VzL6GzFp8TSftyfhYuC10-8-opnLXPLulWbhnQQh49yBxaGpwyciHO4BSJnvS0FoeHTYPWoLg72BIaUjBrLtVIej1gZsx6GLPQ_PXFHnxstruSmEzomsLu0FDxGk_i1zwaJZyVUz8hYvOapUElXqen-o_QoRX6ag9T1_Z6Ya0v_whbXI6J-GD4xAd2eTbgQ"
+    charset="UTF-8"></script>
+  <style>
+    :root {
+      --bg: #eef7ff;
+      --bg-soft: #f7fbff;
+      --card: #fff;
+      --glass: rgba(255, 255, 255, .78);
+      --line: #d7e7f7;
+      --k8s: #326ce5;
+      --cyan: #00a8e8;
+      --mint: #00c48c;
+      --green: #12b886;
+      --amber: #ffb020;
+      --red: #f04438;
+      --purple: #7c3aed;
+      --ink: #102033;
+      --muted: #6b7c93;
+      --muted2: #9aaabe;
+      --shadow: 0 18px 45px rgba(32, 83, 148, .12);
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Inter', sans-serif
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
+
+    html,
+    body {
+      height: 100%
+    }
+
+    body {
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: var(--sans);
+      background: radial-gradient(circle at 5% 8%, rgba(50, 108, 229, .18), transparent 26%), radial-gradient(circle at 95% 5%, rgba(0, 196, 140, .18), transparent 24%), radial-gradient(circle at 85% 86%, rgba(124, 58, 237, .10), transparent 28%), linear-gradient(135deg, #edf7ff 0%, #f7fbff 48%, #eaf7f2 100%);
+      overflow: hidden
+    }
+
+    body:before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image: linear-gradient(rgba(50, 108, 229, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(50, 108, 229, .045) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .8), rgba(0, 0, 0, .18));
+      pointer-events: none
+    }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      padding: 16px;
+      gap: 16px
+    }
+
+    .rail,
+    .topbar,
+    .context,
+    .content {
+      position: relative;
+      z-index: 1;
+      border: 1px solid rgba(50, 108, 229, .15);
+      background: var(--glass);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px)
+    }
+
+    .rail {
+      border-radius: 30px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 14px 10px
+    }
+
+    .brand-mark {
+      width: 58px;
+      height: 58px;
+      border-radius: 20px;
+      background: conic-gradient(from 220deg, var(--k8s), var(--cyan), var(--mint), var(--k8s));
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 800;
+      font-size: 22px;
+      box-shadow: 0 14px 30px rgba(50, 108, 229, .28);
+      margin-bottom: 20px
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      align-items: center
+    }
+
+    .nav-btn {
+      width: 64px;
+      height: 64px;
+      border: 0;
+      border-radius: 22px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: .2s ease;
+      font-family: var(--sans)
+    }
+
+    .nav-btn .ico {
+      font-size: 22px
+    }
+
+    .nav-btn .txt {
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .6px
+    }
+
+    .nav-btn:hover {
+      background: rgba(50, 108, 229, .08);
+      color: var(--k8s);
+      transform: translateY(-1px)
+    }
+
+    .nav-btn.active {
+      color: white;
+      background: linear-gradient(145deg, var(--k8s), var(--cyan));
+      box-shadow: 0 14px 28px rgba(50, 108, 229, .25)
+    }
+
+    .rail-footer {
+      margin-top: auto;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--muted2);
+      writing-mode: vertical-rl;
+      letter-spacing: 2px
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 14px
+    }
+
+    .topbar {
+      border-radius: 30px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between
+    }
+
+    .title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px
+    }
+
+    .kube-orb {
+      width: 48px;
+      height: 48px;
+      border-radius: 18px;
+      background: linear-gradient(145deg, #fff, #e9f4ff);
+      border: 1px solid rgba(50, 108, 229, .16);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      box-shadow: inset 0 -8px 20px rgba(50, 108, 229, .08)
+    }
+
+    h1 {
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -.6px
+    }
+
+    .subtitle {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px
+    }
+
+    .pill {
+      border: 1px solid rgba(0, 196, 140, .25);
+      background: rgba(0, 196, 140, .09);
+      color: #008d68;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-weight: 900;
+      font-size: 11px;
+      letter-spacing: .8px;
+      display: flex;
+      gap: 7px;
+      align-items: center
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 6px rgba(0, 196, 140, .12);
+      animation: pulse 1.7s infinite
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        transform: scale(1);
+        opacity: 1
+      }
+
+      50% {
+        transform: scale(.72);
+        opacity: .55
+      }
+    }
+
+    .clock {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px
+    }
+
+    .stat {
+      background: var(--glass);
+      border: 1px solid rgba(50, 108, 229, .14);
+      border-radius: 24px;
+      padding: 14px;
+      box-shadow: 0 10px 25px rgba(50, 108, 229, .10);
+      position: relative;
+      overflow: hidden
+    }
+
+    .stat:after {
+      content: "";
+      position: absolute;
+      right: -18px;
+      top: -28px;
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: rgba(50, 108, 229, .08)
+    }
+
+    .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--muted);
+      font-weight: 900
+    }
+
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 28px;
+      font-weight: 800;
+      margin-top: 5px;
+      color: var(--k8s)
+    }
+
+    .stat-value.warn {
+      color: var(--amber)
+    }
+
+    .stat-value.danger {
+      color: var(--red)
+    }
+
+    .stat-value.ok {
+      color: var(--green)
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 14px
+    }
+
+    .context {
+      min-height: 0;
+      border-radius: 30px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column
+    }
+
+    .ctx-head {
+      padding: 18px;
+      background: linear-gradient(135deg, rgba(50, 108, 229, .10), rgba(0, 196, 140, .06));
+      border-bottom: 1px solid var(--line)
+    }
+
+    .ctx-title {
+      font-weight: 900;
+      font-size: 14px
+    }
+
+    .ctx-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 5px
+    }
+
+    .ctx-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px
+    }
+
+    .ctx-section-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1.1px;
+      margin: 8px 6px;
+      display: flex;
+      justify-content: space-between
+    }
+
+    .mini-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 11px;
+      margin-bottom: 8px;
+      box-shadow: 0 8px 18px rgba(16, 32, 51, .04)
+    }
+
+    .mini-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .mini-sub {
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 4px
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 800;
+      border: 1px solid transparent
+    }
+
+    .badge.ok {
+      background: rgba(0, 196, 140, .10);
+      color: #008d68;
+      border-color: rgba(0, 196, 140, .18)
+    }
+
+    .badge.warn {
+      background: rgba(255, 176, 32, .12);
+      color: #a96900;
+      border-color: rgba(255, 176, 32, .20)
+    }
+
+    .badge.danger {
+      background: rgba(240, 68, 56, .10);
+      color: #c22f26;
+      border-color: rgba(240, 68, 56, .18)
+    }
+
+    .badge.info {
+      background: rgba(50, 108, 229, .10);
+      color: var(--k8s);
+      border-color: rgba(50, 108, 229, .18)
+    }
+
+    .pod-row {
+      display: flex;
+      gap: 9px;
+      align-items: center
+    }
+
+    .pdot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--muted2)
+    }
+
+    .pdot.Running {
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(18, 184, 134, .11)
+    }
+
+    .pdot.quarantined {
+      background: var(--amber);
+      box-shadow: 0 0 0 5px rgba(255, 176, 32, .14);
+      animation: pulse 1.1s infinite
+    }
+
+    .pdot.compromised {
+      background: var(--red);
+      box-shadow: 0 0 0 5px rgba(240, 68, 56, .14);
+      animation: pulse .8s infinite
+    }
+
+    .content {
+      min-height: 0;
+      border-radius: 30px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, .70)
+    }
+
+    .tpane {
+      height: 100%;
+      display: none;
+      min-height: 0
+    }
+
+    .tpane.active {
+      display: grid;
+      grid-template-rows: auto 1fr
+    }
+
+    .section-head {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(90deg, rgba(255, 255, 255, .88), rgba(241, 248, 255, .74))
+    }
+
+    .section-kicker {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--k8s);
+      font-weight: 900;
+      letter-spacing: 1.4px;
+      text-transform: uppercase
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 900;
+      margin-top: 3px
+    }
+
+    .rbtn {
+      border: 1px solid rgba(50, 108, 229, .20);
+      background: #fff;
+      color: var(--k8s);
+      border-radius: 14px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-weight: 900;
+      font-size: 11px;
+      box-shadow: 0 8px 18px rgba(50, 108, 229, .08)
+    }
+
+    .pipeline-wrap {
+      min-height: 0;
+      overflow: auto;
+      padding: 20px;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 18px
+    }
+
+    .pipeline {
+      min-height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      background: radial-gradient(circle at 20% 30%, rgba(50, 108, 229, .10), transparent 30%), radial-gradient(circle at 80% 70%, rgba(0, 196, 140, .10), transparent 28%), linear-gradient(135deg, #fff, #f3f9ff);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      padding: 24px
+    }
+
+    .pnode {
+      width: 142px;
+      min-height: 138px;
+      border-radius: 28px;
+      padding: 16px 13px;
+      text-align: center;
+      background: rgba(255, 255, 255, .88);
+      border: 1px solid rgba(50, 108, 229, .18);
+      box-shadow: 0 16px 34px rgba(50, 108, 229, .10);
+      position: relative;
+      overflow: hidden
+    }
+
+    .pnode:before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 5px;
+      background: linear-gradient(90deg, var(--k8s), var(--mint))
+    }
+
+    .pnode-icon {
+      font-size: 27px;
+      margin-bottom: 9px
+    }
+
+    .pnode-name {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--k8s);
+      font-weight: 900;
+      letter-spacing: .8px
+    }
+
+    .pnode-desc {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 5px;
+      line-height: 1.3
+    }
+
+    .pnode-st {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+      margin-top: 10px
+    }
+
+    .pnode-st.ok {
+      color: var(--green)
+    }
+
+    .pnode-st.down {
+      color: var(--red)
+    }
+
+    .parrow svg {
+      width: 42px;
+      height: 24px
+    }
+
+    @keyframes flow {
+      from {
+        stroke-dashoffset: 24
+      }
+
+      to {
+        stroke-dashoffset: 0
+      }
+    }
+
+    .fline {
+      stroke-dasharray: 6 4;
+      animation: flow .9s linear infinite
+    }
+
+    .feed-card {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: #fff;
+      padding: 14px;
+      max-height: 210px;
+      overflow: auto
+    }
+
+    .feed-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 900;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      margin-bottom: 10px
+    }
+
+    .fevent {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--line)
+    }
+
+    .tbl-wrap {
+      min-height: 0;
+      overflow: auto
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 8px;
+      padding: 10px 14px;
+      font-family: var(--mono);
+      font-size: 12px
+    }
+
+    th {
+      text-align: left;
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      padding: 8px 10px;
+      position: sticky;
+      top: 0;
+      background: rgba(247, 251, 255, .96);
+      z-index: 2
+    }
+
+    td {
+      background: #fff;
+      padding: 12px 10px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line)
+    }
+
+    td:first-child {
+      border-left: 1px solid var(--line);
+      border-radius: 16px 0 0 16px
+    }
+
+    td:last-child {
+      border-right: 1px solid var(--line);
+      border-radius: 0 16px 16px 0
+    }
+
+    .abadge {
+      padding: 5px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 900;
+      white-space: nowrap
+    }
+
+    .abadge.alert_only {
+      background: rgba(0, 168, 232, .10);
+      color: #0079ad;
+      border: 1px solid rgba(0, 168, 232, .18)
+    }
+
+    .abadge.quarantine_pod {
+      background: rgba(255, 176, 32, .12);
+      color: #a96900;
+      border: 1px solid rgba(255, 176, 32, .22)
+    }
+
+    .abadge.delete_pod {
+      background: rgba(240, 68, 56, .10);
+      color: #c22f26;
+      border: 1px solid rgba(240, 68, 56, .20)
+    }
+
+    .abadge.ignore {
+      background: rgba(107, 124, 147, .10);
+      color: var(--muted);
+      border: 1px solid rgba(107, 124, 147, .18)
+    }
+
+    .score.high {
+      color: var(--red);
+      font-weight: 900
+    }
+
+    .score.mid {
+      color: var(--amber);
+      font-weight: 900
+    }
+
+    .score.low {
+      color: var(--green);
+      font-weight: 900
+    }
+
+    .log-hdr {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center
+    }
+
+    .logview {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px 18px;
+      background: #07111f;
+      color: #d9ecff;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.72
+    }
+
+    .ll {
+      padding: 2px 0;
+      white-space: pre-wrap;
+      word-break: break-word
+    }
+
+    .ll.W {
+      color: #ffd38a
+    }
+
+    .ll.E {
+      color: #ff9aa4
+    }
+
+    .ll.I {
+      color: #9fd3ff
+    }
+
+    .ll.section {
+      color: #79f2c0;
+      font-weight: 900;
+      border-top: 1px solid rgba(255, 255, 255, .12);
+      margin-top: 10px;
+      padding-top: 10px
+    }
+
+    .kmsg {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      margin: 10px 14px;
+      padding: 14px;
+      box-shadow: 0 8px 18px rgba(16, 32, 51, .04)
+    }
+
+    .kmsg-rule {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--k8s)
+    }
+
+    .kmsg-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px
+    }
+
+    .empty {
+      padding: 42px;
+      text-align: center;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 13px
+    }
+
+    .sidebar-metric {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 9px 6px;
+      border-bottom: 1px dashed var(--line)
+    }
+
+    .sidebar-metric strong {
+      color: var(--ink);
+      font-family: var(--mono)
+    }
+
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(215, 231, 247, .35);
+      border-radius: 999px
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: linear-gradient(var(--k8s), var(--cyan));
+      border-radius: 999px
+    }
+
+    @media(max-width:1100px) {
+      .app {
+        grid-template-columns: 1fr;
+        overflow: auto;
+        height: auto
+      }
+
+      .rail {
+        flex-direction: row
+      }
+
+      .nav {
+        flex-direction: row
+      }
+
+      .rail-footer {
+        display: none
+      }
+
+      .workspace {
+        grid-template-columns: 1fr
+      }
+
+      .stats {
+        grid-template-columns: repeat(3, 1fr)
+      }
+
+      body {
+        overflow: auto
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand-mark">⎈</div>
+      <div class="nav"><button class="nav-btn active" onclick="show('pipeline')" data-name="pipeline"><span
+            class="ico">🧬</span><span class="txt">Flow</span></button><button class="nav-btn" onclick="show('audit')"
+          data-name="audit"><span class="ico">📋</span><span class="txt">Audit</span></button><button class="nav-btn"
+          onclick="show('kafka')" data-name="kafka"><span class="ico">📨</span><span
+            class="txt">Kafka</span></button><button class="nav-btn" onclick="show('logs')" data-name="logs"><span
+            class="ico">🧾</span><span class="txt">Logs</span></button></div>
+      <div class="rail-footer">ZERO TRUST MESH</div>
+    </aside>
+    <main class="shell">
+      <header class="topbar">
+        <div class="title-wrap">
+          <div class="kube-orb">🛡️</div>
+          <div>
+            <h1>K8s Autonomous Defense Mesh</h1>
+            <div class="subtitle">Falco → Kafka → AI Agent → NetworkPolicy + Istio AuthZ + mTLS</div>
+          </div>
+        </div>
+        <div class="top-actions"><span class="clock" id="clock"></span><span class="pill"><span
+              class="dot"></span>LIVE</span></div>
+      </header>
+      <section class="stats">
+        <div class="stat">
+          <div class="stat-label">Total Events</div>
+          <div class="stat-value" id="s-total">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Alerts</div>
+          <div class="stat-value" id="s-alert">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Quarantined</div>
+          <div class="stat-value warn" id="s-quar">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Deleted</div>
+          <div class="stat-value danger" id="s-del">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Policies</div>
+          <div class="stat-value ok" id="s-np">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Running Pods</div>
+          <div class="stat-value ok" id="s-pods">0</div>
+        </div>
+      </section>
+      <section class="workspace">
+        <aside class="context">
+          <div class="ctx-head">
+            <div class="ctx-title" id="ctx-title">Pipeline Overview</div>
+            <div class="ctx-desc" id="ctx-desc">Live view of the autonomous defense chain and current Kubernetes
+              security state.</div>
+          </div>
+          <div class="ctx-body" id="ctx-body"></div>
+        </aside>
+        <section class="content">
+          <div class="tpane active" id="t-pipeline">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Autonomous Closed Loop</div>
+                <div class="section-title">Defense Pipeline</div>
+              </div><button class="rbtn" onclick="refresh()">Refresh</button>
+            </div>
+            <div class="pipeline-wrap">
+              <div class="pipeline">
+                <div class="pnode">
+                  <div class="pnode-icon">👁️</div>
+                  <div class="pnode-name">FALCO</div>
+                  <div class="pnode-desc">Runtime syscalls</div>
+                  <div class="pnode-st ok" id="p-falco">● RUNNING</div>
+                </div>
+                <div class="parrow"><svg viewBox="0 0 42 24">
+                    <line class="fline" x1="0" y1="12" x2="32" y2="12" stroke="#326ce5" stroke-width="2" />
+                    <polygon points="32,7 42,12 32,17" fill="#326ce5" />
+                  </svg></div>
+                <div class="pnode">
+                  <div class="pnode-icon">📨</div>
+                  <div class="pnode-name">KAFKA</div>
+                  <div class="pnode-desc">Event broker</div>
+                  <div class="pnode-st ok" id="p-kafka">● RUNNING</div>
+                </div>
+                <div class="parrow"><svg viewBox="0 0 42 24">
+                    <line class="fline" x1="0" y1="12" x2="32" y2="12" stroke="#326ce5" stroke-width="2" />
+                    <polygon points="32,7 42,12 32,17" fill="#326ce5" />
+                  </svg></div>
+                <div class="pnode">
+                  <div class="pnode-icon">🤖</div>
+                  <div class="pnode-name">AI AGENT</div>
+                  <div class="pnode-desc">Risk scoring</div>
+                  <div class="pnode-st ok" id="p-agent">● RUNNING</div>
+                </div>
+                <div class="parrow"><svg viewBox="0 0 42 24">
+                    <line class="fline" x1="0" y1="12" x2="32" y2="12" stroke="#326ce5" stroke-width="2" />
+                    <polygon points="32,7 42,12 32,17" fill="#326ce5" />
+                  </svg></div>
+                <div class="pnode">
+                  <div class="pnode-icon">⚡</div>
+                  <div class="pnode-name">ENFORCER</div>
+                  <div class="pnode-desc">NP + Istio AuthZ</div>
+                  <div class="pnode-st ok" id="p-enforcer">● ACTIVE</div>
+                </div>
+                <div class="parrow"><svg viewBox="0 0 42 24">
+                    <line class="fline" x1="0" y1="12" x2="32" y2="12" stroke="#326ce5" stroke-width="2" />
+                    <polygon points="32,7 42,12 32,17" fill="#326ce5" />
+                  </svg></div>
+                <div class="pnode">
+                  <div class="pnode-icon">🔐</div>
+                  <div class="pnode-name">OPA/ISTIO</div>
+                  <div class="pnode-desc">Zero Trust policy</div>
+                  <div class="pnode-st ok" id="p-opa">● RUNNING</div>
+                </div>
+              </div>
+              <div class="feed-card">
+                <div class="feed-title">Live Decision Feed</div>
+                <div id="live-feed">
+                  <div class="empty" style="padding:18px">Waiting for events... trigger an attack to see live data</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tpane" id="t-audit">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Forensics Timeline</div>
+                <div class="section-title">Audit Log</div>
+              </div><button class="rbtn" onclick="loadAudit()">Refresh</button>
+            </div>
+            <div class="tbl-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Pod</th>
+                    <th>Rule</th>
+                    <th>Score</th>
+                    <th>Action</th>
+                    <th>File/Cmd</th>
+                    <th>Elapsed</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-body">
+                  <tr>
+                    <td colspan="7" class="empty">No audit entries yet — trigger an attack</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="tpane" id="t-kafka">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Message Stream</div>
+                <div class="section-title">Kafka Events</div>
+              </div><button class="rbtn" onclick="loadKafka()">Refresh</button>
+            </div>
+            <div class="tbl-wrap" id="kafka-list">
+              <div class="empty">Loading Kafka messages...</div>
+            </div>
+          </div>
+          <div class="tpane" id="t-logs">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">Runtime Evidence</div>
+                <div class="section-title">Agent + Istio Logs</div>
+              </div><button class="rbtn" onclick="loadLogs()">Refresh</button>
+            </div>
+            <div class="log-hdr"><span style="font-family:var(--mono);font-size:11px;color:var(--muted)"
+                id="log-pod"></span><span class="badge info">ai-agent + istio-proxy</span></div>
+            <div class="logview" id="logview"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+  <script>
+    const COLORS = { alert_only: '#00a8e8', quarantine_pod: '#ffb020', delete_pod: '#f04438', ignore: '#6b7c93' }; let currentPane = 'pipeline', latestPods = [], latestNP = [], latestStats = { actions: {} }; function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') } function show(name) { currentPane = name; document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.name === name)); document.querySelectorAll('.tpane').forEach(p => p.classList.toggle('active', p.id === 't-' + name)); updateContext(); if (name === 'audit') loadAudit(); if (name === 'kafka') loadKafka(); if (name === 'logs') loadLogs() } function podMini(p) { const sec = p.security_status || 'normal', dot = sec === 'quarantined' ? 'quarantined' : sec === 'compromised' ? 'compromised' : p.status === 'Running' ? 'Running' : 'Pending', b = sec === 'quarantined' ? 'warn' : sec === 'compromised' ? 'danger' : p.ready ? 'ok' : 'info'; return `<div class="mini-card"><div class="pod-row"><span class="pdot ${dot}"></span><div style="min-width:0;flex:1"><div class="mini-title">${esc(p.name)}</div><div class="mini-sub">${esc(p.namespace)} · ${esc(p.status)} · ${esc(p.node || '')}</div></div><span class="badge ${b}">${esc(sec)}</span></div></div>` } function policyMini(n) { return `<div class="mini-card"><div class="mini-title">${esc(n.name)}</div><div class="mini-sub">namespace: ${esc(n.namespace)}</div></div>` } function updateContext() { const title = document.getElementById('ctx-title'), desc = document.getElementById('ctx-desc'), body = document.getElementById('ctx-body'), counts = latestStats.actions || {}, quarantined = latestPods.filter(p => p.security_status === 'quarantined'), compromised = latestPods.filter(p => p.security_status === 'compromised'); if (currentPane === 'pipeline') { title.textContent = 'Mesh Health'; desc.textContent = 'Section sidebar: live service status, Zero-Trust policy count, and high-risk pods.'; body.innerHTML = `<div class="ctx-section-title">Security Posture <span>${latestPods.length} pods</span></div><div class="mini-card"><div class="sidebar-metric">Running Pods <strong>${latestStats.running_pods || 0}</strong></div><div class="sidebar-metric">Network Policies <strong>${latestStats.network_policies || 0}</strong></div><div class="sidebar-metric">Falco Events <strong>${latestStats.total_events || 0}</strong></div><div class="sidebar-metric">Total Decisions <strong>${latestStats.total_events || 0}</strong></div></div><div class="ctx-section-title">Risk Watch</div>${quarantined.length || compromised.length ? [...quarantined, ...compromised].slice(0, 8).map(p => podMini(p)).join('') : '<div class="mini-card"><span class="badge ok">No active compromise labels</span><div class="mini-sub">Quarantined pods will appear here.</div></div>'}<div class="ctx-section-title">Isolation Policies <span>${latestNP.length}</span></div>${latestNP.slice(0, 8).map(n => policyMini(n)).join('') || '<div class="mini-card"><div class="mini-sub">No isolation policy active.</div></div>'}` } else if (currentPane === 'audit') { title.textContent = 'Audit Lens'; desc.textContent = 'Section sidebar: action counters and current isolated workloads.'; body.innerHTML = `<div class="ctx-section-title">Action Counters</div><div class="mini-card"><div class="sidebar-metric">Alert Only <strong>${counts.alert_only || 0}</strong></div><div class="sidebar-metric">Quarantine <strong>${counts.quarantine_pod || 0}</strong></div><div class="sidebar-metric">Delete Pod <strong>${counts.delete_pod || 0}</strong></div><div class="sidebar-metric">Ignore <strong>${counts.ignore || 0}</strong></div></div><div class="ctx-section-title">Quarantined Evidence</div>${quarantined.slice(0, 10).map(p => podMini(p)).join('') || '<div class="mini-card"><div class="mini-sub">No quarantined pods currently visible.</div></div>'}` } else if (currentPane === 'kafka') { title.textContent = 'Kafka Lens'; desc.textContent = 'Section sidebar: event transport status and namespaces producing telemetry.'; body.innerHTML = `<div class="ctx-section-title">Broker Status</div><div class="mini-card"><div class="sidebar-metric">Kafka Pods <strong>${latestPods.filter(p => p.namespace === 'kafka-system').length}</strong></div><div class="sidebar-metric">Falco Messages <strong>${latestStats.total_events || 0}</strong></div><div class="sidebar-metric">Agent Decisions <strong>${latestStats.total_events || 0}</strong></div></div><div class="ctx-section-title">Kafka Namespace</div>${latestPods.filter(p => p.namespace === 'kafka-system').map(p => podMini(p)).join('') || '<div class="mini-card"><span class="badge danger">Kafka not visible</span></div>'}` } else { title.textContent = 'Log Lens'; desc.textContent = 'Section sidebar: agent pod identity and container-level evidence.'; const agent = latestPods.find(p => p.name.includes('ai-agent')); body.innerHTML = `<div class="ctx-section-title">Selected Agent</div>${agent ? podMini(agent) : '<div class="mini-card"><span class="badge danger">Agent not found</span></div>'}<div class="ctx-section-title">Log Streams</div><div class="mini-card"><div class="sidebar-metric">Application <strong>ai-agent</strong></div><div class="sidebar-metric">Sidecar <strong>istio-proxy</strong></div><div class="mini-sub">Both streams are merged by the dashboard API.</div></div>` } } setInterval(() => { document.getElementById('clock').textContent = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC' }, 1000); async function refresh() { try { const [sr, pr, npr] = await Promise.all([fetch('/api/stats').then(r => r.json()), fetch('/api/pods').then(r => r.json()), fetch('/api/networkpolicies').then(r => r.json())]); latestStats = sr; latestPods = pr; latestNP = npr; document.getElementById('s-total').textContent = sr.total_events || 0; document.getElementById('s-alert').textContent = sr.actions?.alert_only || 0; document.getElementById('s-quar').textContent = sr.actions?.quarantine_pod || 0; document.getElementById('s-del').textContent = sr.actions?.delete_pod || 0; document.getElementById('s-np').textContent = sr.network_policies || 0; document.getElementById('s-pods').textContent = sr.running_pods || 0; const byNS = ns => pr.filter(p => p.namespace === ns && p.status === 'Running'); setPipe('p-falco', byNS('security').some(p => p.name.includes('falco'))); setPipe('p-kafka', byNS('kafka-system').length > 0); setPipe('p-agent', pr.some(p => p.name.includes('ai-agent') && p.status === 'Running')); setPipe('p-enforcer', pr.some(p => p.name.includes('ai-agent') && p.status === 'Running')); setPipe('p-opa', byNS('gatekeeper-system').length > 0); updateContext() } catch (e) { console.error(e) } } function setPipe(id, up) { const el = document.getElementById(id); el.textContent = up ? '● RUNNING' : '● DOWN'; el.className = 'pnode-st ' + (up ? 'ok' : 'down') } async function loadAudit() { try { const entries = await fetch('/api/audit').then(r => r.json()); if (!entries.length) { document.getElementById('audit-body').innerHTML = '<tr><td colspan="7" class="empty">No audit entries yet — trigger an attack</td></tr>'; return } document.getElementById('audit-body').innerHTML = entries.map(e => { const ts = (e.timestamp || '').slice(0, 19).replace('T', ' '), sc = e.risk_score || 0, sc_cls = sc >= 90 ? 'high' : sc >= 70 ? 'mid' : 'low', act = e.action || 'ignore', fc = e.file || e.command || '—', el = e.elapsed_seconds ? Math.round(e.elapsed_seconds * 1000) + 'ms' : '—'; return `<tr><td>${esc(ts)}</td><td style="font-size:11px">${esc(e.pod || '—')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.rule || '—')}</td><td><span class="score ${sc_cls}">${sc}</span></td><td><span class="abadge ${act}">${act}</span></td><td style="font-size:11px;color:var(--muted)">${esc(fc)}</td><td style="color:var(--muted)">${el}</td></tr>` }).join('') } catch (e) { console.error(e) } } async function loadKafka() { try { const d = await fetch('/api/kafka').then(r => r.json()), msgs = d.messages || []; if (!msgs.length) { document.getElementById('kafka-list').innerHTML = '<div class="empty">No Kafka messages yet — trigger an attack</div>'; return } document.getElementById('kafka-list').innerHTML = msgs.map(m => { const rule = m.rule || m.raw || 'Unknown', pri = m.priority || '', pod = (m.output_fields || {})['k8s.pod.name'] || '—', ns = (m.output_fields || {})['k8s.ns.name'] || '—', ts = (m.time || '').slice(0, 19).replace('T', ' '); return `<div class="kmsg"><div class="kmsg-rule">${esc(rule)} <span class="badge info">${esc(pri)}</span></div><div class="kmsg-meta">pod: ${esc(pod)} &nbsp;|&nbsp; ns: ${esc(ns)} &nbsp;|&nbsp; ${esc(ts)}</div></div>` }).join('') } catch (e) { console.error(e) } } async function loadLogs() { try { const d = await fetch('/api/agent-logs').then(r => r.json()); document.getElementById('log-pod').textContent = d.pod ? `pod: ${d.pod}` : ''; const html = (d.logs || '').split('\n').map(line => { const cls = line.includes('=====') ? 'section' : line.includes('[WARNING]') ? 'W' : line.includes('[ERROR]') ? 'E' : 'I'; return `<div class="ll ${cls}">${esc(line)}</div>` }).join(''); const lv = document.getElementById('logview'); lv.innerHTML = html || '<div class="empty">No logs available yet.</div>'; lv.scrollTop = lv.scrollHeight } catch (e) { console.error(e) } } const es = new EventSource('/api/stream'), feed = document.getElementById('live-feed'); es.onmessage = e => { try { const ev = JSON.parse(e.data), act = ev.action || 'ignore', color = COLORS[act] || '#6b7c93', ts = (ev.timestamp || '').slice(11, 19), div = document.createElement('div'); div.className = 'fevent'; div.innerHTML = `<span style="color:var(--muted)">${ts}</span> <span style="color:${color};font-weight:900">${act.toUpperCase()}</span> <span> pod=${esc(ev.pod || '?')}</span> <span style="color:var(--muted)"> score=${ev.risk_score || 0} rule=${esc(ev.rule || '')}</span>`; const empty = feed.querySelector('.empty'); if (empty) empty.remove(); feed.insertBefore(div, feed.firstChild); if (feed.children.length > 28) feed.removeChild(feed.lastChild); refresh() } catch (ex) { } }; refresh(); loadKafka(); setInterval(refresh, 10000);
+  </script>
+</body>
+
+</html>
