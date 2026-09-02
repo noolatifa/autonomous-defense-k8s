@@ -115,3 +115,22 @@ This playbook is currently kept for project context but is **marked for correcti
 * **Redundancy**: The playbook re-runs a Helm upgrade cycle for Falco that mirrors the parameter stack already established in Playbook 02 (modern eBPF, JSON output, and Kafka routing mappings).
 * **Target Refactoring**: The single unique runtime parameter missing from Playbook 02 is the unbuffered stream flag (`extraArgs: ["--unbuffered"]`). 
 * **Correction Roadmap**: To streamline infrastructure execution, Playbook 04 will be completely deleted. The unbuffered parameter will be safely backported into Playbook 02 via the direct Helm CLI flag: `--set falco.extraArgs="{--unbuffered}"`.
+
+### Playbook `05 - Create Kafka Topics`
+It configures the internal data pathways inside the running message broker, provisioning the core messaging infrastructure channels required for threat telemetry streaming.
+
+---
+
+### Deployment Steps Breakdown
+
+##### 1. Runtime Target Identification
+* **Dynamic Pod Resolution**: Queries the cluster database using `jsonpath` filtering to isolate the operational name of the running Kafka broker container.
+
+##### 2. Message Channel Provisioning
+* **Topic Initialization**: Tunnels inside the active container via `kubectl exec` to invoke native management binaries.
+* **Data Channel Creation**: Carves out the `falco-alerts` pipeline with strict partitioning (`1`) and single replication factors (`1`).
+* **Idempotency Enforcement**: Employs the `--if-not-exists` flag parameter rule to allow repeatable playbook reruns without collision crashes.
+
+##### 3. Channel Verification
+* **Registry Auditing**: Queries the broker connection layers to return a complete structural list of active telemetry channels.
+* **Console Logging**: Registers and prints the running streaming layout straight to the automation interface screen.
