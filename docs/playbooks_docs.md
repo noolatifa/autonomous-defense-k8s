@@ -81,3 +81,25 @@ It configures the monitoring and runtime security logging infrastructure on a si
 * **Pod Audit Scan**: Triggers global cluster commands to capture container runtime status across all environment blocks.
 * **Output Logging**: Registers the final layout text array and outputs execution summaries onto the automation terminal screen.
 
+### Playbook `03 - Deploy Kafka on Kubernetes`. 
+It provisions a modern, single-node, ZooKeeperless Apache Kafka cluster operating in KRaft mode with persistent storage to act as the central event bus between Falco and the AI agent.
+
+---
+
+### Deployment Steps Breakdown
+
+##### 1. Modular Orchestration (03-deploy_kafka.yml)
+* **Role Delegation**: Keeps the primary playbook minimalist by outsourcing execution logic to a dedicated `kafka` Ansible role.
+* **Context Mapping**: Injecting user-specific `KUBECONFIG` paths straight into the environment runtime layers ensures `kubectl` calls securely target the intended cluster.
+
+##### 2. Role Execution (roles/kafka/tasks/main.yml)
+* **Idempotent Provisioning**: Generates a dry-run text blueprint piped directly into standard creation commands to set up the `kafka-system` namespace without re-execution errors.
+* **Artifact Traceability**: Provisions a dedicated directory on the cluster machine and syncs the static manifest payload to allow clear manual auditing and easier debugging.
+* **Declarative Control**: Triggers a clean `kubectl apply` shell execution, decoupling orchestration logic (Ansible) from core resource state declaration (Kubernetes).
+
+##### 3. Manifest Architecture (k8s/kafka/kafka-direct.yaml)
+* **Logical Isolation**: Enforces a dedicated `kafka-system` namespace to align with the principle of least privilege.
+* **Data Persistence**: Requests 1Gi of disk space via `kafka-data-pvc` leveraging the automated `local-path` StorageClass to guarantee that messages and offsets survive pod Restarts.
+* **Headless Network Service**: Defines a `clusterIP: None` network protocol configuration to bypass standard virtual load-balancing, forcing the system DNS to map direct Pod addresses for native internal Kafka broker discovery.
+* **KRaft Engine Configuration**: Combines broker and controller properties inside a single Confluent Kafka replica container version 7.6.0 deployment, dropping legacy ZooKeeper dependencies.
+* **Listener & Storage Integration**: Points core runtime networking components to the internal cluster domain address (`kafka.kafka-system.svc.cluster.local`) and mounts the persistent volume path inside `/var/lib/kafka/data`.
