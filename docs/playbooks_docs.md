@@ -103,3 +103,15 @@ It provisions a modern, single-node, ZooKeeperless Apache Kafka cluster operatin
 * **Headless Network Service**: Defines a `clusterIP: None` network protocol configuration to bypass standard virtual load-balancing, forcing the system DNS to map direct Pod addresses for native internal Kafka broker discovery.
 * **KRaft Engine Configuration**: Combines broker and controller properties inside a single Confluent Kafka replica container version 7.6.0 deployment, dropping legacy ZooKeeper dependencies.
 * **Listener & Storage Integration**: Points core runtime networking components to the internal cluster domain address (`kafka.kafka-system.svc.cluster.local`) and mounts the persistent volume path inside `/var/lib/kafka/data`.
+
+
+
+
+### Playbook `04 - Link Falco to Kafka for Autonomous Defense` [UNDER CORRECTION]
+
+**Disclaimer / Optimization Warning:**
+This playbook is currently kept for project context but is **marked for correction and decommissioning**. It contains structural redundancies that introduce configuration drift. 
+
+* **Redundancy**: The playbook re-runs a Helm upgrade cycle for Falco that mirrors the parameter stack already established in Playbook 02 (modern eBPF, JSON output, and Kafka routing mappings).
+* **Target Refactoring**: The single unique runtime parameter missing from Playbook 02 is the unbuffered stream flag (`extraArgs: ["--unbuffered"]`). 
+* **Correction Roadmap**: To streamline infrastructure execution, Playbook 04 will be completely deleted. The unbuffered parameter will be safely backported into Playbook 02 via the direct Helm CLI flag: `--set falco.extraArgs="{--unbuffered}"`.
